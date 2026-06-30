@@ -1,0 +1,4 @@
+# NEVER commit personal content. The seed holds confidential goals/tasks.
+seed.local.json
+*.local.json
+.DS_Store
