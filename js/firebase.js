@@ -6,6 +6,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+  GoogleAuthProvider, signInWithPopup,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, onSnapshot, setDoc,
@@ -35,9 +36,17 @@ export function onAuth(cb) {
   return onAuthStateChanged(auth, cb);
 }
 
+export async function signInWithGoogle() {
+  if (!configured) throw new Error('Firebase not configured');
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  const cred = await signInWithPopup(auth, provider);
+  return cred.user;
+}
+
+// kept as a fallback; UI uses Google sign-in.
 export async function signIn(email, password) {
   if (!configured) throw new Error('Firebase not configured');
-  // allow a bare username -> map to the owner email convention
   if (email && !email.includes('@')) email = email + '@planner.local';
   const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
   return cred.user;

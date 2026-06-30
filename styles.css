@@ -96,3 +96,5 @@ label input, label select { color: var(--fg); }
 .signin h1 { font-size: 28px; }
 .signin .card { text-align: left; }
 .err { color: var(--p1); font-size: 13px; min-height: 16px; }
+.gbtn { display: flex; align-items: center; justify-content: center; gap: 10px; background: #fff; color: #1f2330; }
+.glogo { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: conic-gradient(from -45deg, #ea4335 0 25%, #fbbc05 0 50%, #34a853 0 75%, #4285f4 0); color: #fff; font-weight: 800; font-size: 13px; }

@@ -6,7 +6,7 @@ import { buildDailyList, scoreTask, eligibleTasks, isBig, todayEffort } from './
 import { computeStreak, daySummary, mustDoStatus, rollup } from './reflection.js';
 import { dashboard, goalProgress, goalTasks } from './dashboard.js';
 import * as ai from './ai.js';
-import { initFirebase, isConfigured, onAuth, signIn, signOutUser, watchDoc, writeDoc } from './firebase.js';
+import { initFirebase, isConfigured, onAuth, signInWithGoogle, signOutUser, watchDoc, writeDoc } from './firebase.js';
 
 const CTX_EMOJI = { work: '💼', home: '🏠', outdoor: '🌳', digital: '💻', family: '👨‍👩‍👧', personal: '🧘' };
 const PRI_LABEL = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
@@ -82,16 +82,16 @@ function renderSignIn() {
     <div class="signin">
       <h1>🎯 Life Planner</h1>
       <p class="muted">Private. Synced across your devices.</p>
-      <form id="signinForm" class="card">
-        <label>Email<input type="email" id="email" autocomplete="username" required></label>
-        <label>Password<input type="password" id="password" autocomplete="current-password" required></label>
-        <button class="primary" type="submit">Sign in</button>
+      <div class="card">
+        <button class="primary gbtn" id="googleBtn">
+          <span class="glogo">G</span> Continue with Google
+        </button>
         <p class="err" id="signinErr"></p>
-      </form>
+      </div>
     </div>`;
-  $('#signinForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try { await signIn($('#email').value, $('#password').value); }
+  $('#googleBtn').addEventListener('click', async () => {
+    $('#signinErr').textContent = '';
+    try { await signInWithGoogle(); }
     catch (err) { $('#signinErr').textContent = 'Sign-in failed: ' + (err.code || err.message); }
   });
 }
