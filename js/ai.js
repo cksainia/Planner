@@ -9,7 +9,7 @@ const AI_KEY = 'lifeplanner.ai.v1';
 
 const DEFAULTS = {
   provider: 'anthropic',
-  model: 'claude-sonnet-4-6',   // good + cheap for these utility calls; configurable
+  model: 'claude-sonnet-5',   // current Sonnet; good + cheap for these utility calls
   apiKey: '',
 };
 
