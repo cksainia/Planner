@@ -111,9 +111,29 @@ label input, label select { color: var(--fg); }
 
 /* task rows */
 .list { display: flex; flex-direction: column; gap: 9px; }
-.task { display: flex; gap: 10px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--goalc, transparent); border-radius: 12px; padding: 11px 12px 11px 9px; }
+.task { display: block; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--goalc, transparent); border-radius: 12px; padding: 11px 12px 11px 9px; }
+.trow { display: flex; gap: 10px; align-items: flex-start; }
 .task.sel { outline: 2px solid var(--accent); outline-offset: -1px; }
 .task.done .ttitle { text-decoration: line-through; color: #647199; }
+
+/* sub-task checklist (MS Planner-style) */
+.checklist { margin: 9px 0 1px; padding-left: 34px; display: flex; flex-direction: column; gap: 1px; }
+.subitem { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 7px; }
+.subitem:hover { background: var(--surface2); }
+.subitem.done .subttl { text-decoration: line-through; color: #647199; }
+.subchk { position: relative; flex-shrink: 0; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #3a4568; background: none; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
+.subchk:hover { border-color: var(--accent); }
+.subchk.done { background: var(--good); border-color: var(--good); }
+.subchk svg { position: absolute; }
+.subttl { flex: 1; min-width: 0; font-size: 13px; }
+.subx { background: none; border: none; color: var(--muted3); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; opacity: 0; }
+.subitem:hover .subx, .subx:focus { opacity: 1; }
+.subadd { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+.subinput { flex: 1; background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 6px; font-size: 12.5px; color: var(--fg); }
+.subinput::placeholder { color: var(--muted3); }
+.subinput:focus { border-color: var(--line); background: var(--bg); outline: none; }
+.subaddbtn { flex-shrink: 0; width: 26px; height: 26px; border-radius: 7px; background: var(--surface2); border: 1px solid var(--line); color: var(--accent); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.detail .checklist { padding-left: 0; margin-top: 2px; }
 .tbody { flex: 1; min-width: 0; cursor: pointer; }
 .ttitle { font-size: 15px; line-height: 1.35; font-weight: 500; }
 .ref { color: var(--accent); font-weight: 700; font-size: 12px; }

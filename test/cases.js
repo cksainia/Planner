@@ -345,3 +345,25 @@
   ok(many[0].important === true && many[1].deep === true && many[2].bucket === 'tomorrow', 'parseTasksOffline infers flags per task');
   ok(parseTasksOffline('', true).length === 0, 'parseTasksOffline returns [] for empty input');
 })();
+
+// ---------------- SUB-TASKS (checklist tiles) ----------------
+(function () {
+  importState({ goals: [normGoal({ id: 'g1', title: 'G', weight: 3 })], tasks: [], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  upsertTask({ id: 'par', title: 'Ship v2', goalIds: ['g1'], context: 'work', bucket: 'today' });
+  var kid = addSubtask('par', 'Outline slides');
+  ok(kid && kid.parentId === 'par' && kid.goalIds[0] === 'g1' && kid.context === 'work' && kid.effortMins === 15, 'addSubtask inherits goal/context and links to the parent');
+  ok(addSubtask('nope', 'x') === null && addSubtask('par', '   ') === null, 'addSubtask guards a bad parent / empty title');
+
+  var elig = eligibleTasks(getState(), '2026-07-01').map(function (t) { return t.id; });
+  ok(elig.indexOf('par') >= 0 && elig.indexOf(kid.id) < 0, 'eligibleTasks excludes sub-tasks; the parent tile stays');
+
+  var w0 = getState().wins.length;
+  completeTask(kid.id);
+  ok(getState().wins.length === w0, 'completing a sub-task (checklist item) does NOT log a win');
+  completeTask('par');
+  ok(getState().wins.length === w0 + 1, 'completing the parent task logs a win');
+
+  deleteTask('par');
+  ok(!getState().tasks.find(function (t) { return t.id === 'par' || t.id === kid.id; }), 'deleting a parent cascades to its sub-tasks');
+})();

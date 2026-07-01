@@ -46,7 +46,7 @@ const libs = ['js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'j
 
 // rebuild the namespace objects app.js expects (it uses `store.x` / `ai.x`)
 const namespaces = `
-  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd, addTaskFields };
+  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd, addTaskFields, addSubtask };
   const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay, parseTasks, parseTasksOffline };
 `;
 
@@ -190,6 +190,19 @@ try {
     var made = createTasksFromParsed([{title:'Call surveyor',urgent:true,context:'outdoor',effortMins:15,bucket:'inbox'}], 'quick');
     RESULTS.push([made===1 && store.getState().tasks.some(function(t){return t.title==='Call surveyor' && t.urgent && t.context==='outdoor' && t.effortMins===15;}), 'voice: a Claude-structured task is created from parsed fields']);
     RESULTS.push([store.getState().tasks.length===madeBefore+1, 'voice: exactly one task is added']);
+
+    // 15) Sub-tasks render as an inline checklist on the parent tile (MS Planner style)
+    store.importState({ goals:[{id:'g1',title:'Ship',weight:3}], tasks:[{id:'par',title:'Ship v2',goalIds:['g1'],bucket:'today'}], seedVersion:1 }, { markSeed:true });
+    store.applyCloud(null);
+    var kid = store.addSubtask('par', 'Outline slides');
+    view='tasks'; tasksView='goal'; render();
+    RESULTS.push([!!document.querySelector('.task[data-id=par]'), 'parent renders as a tile']);
+    RESULTS.push([!document.querySelector('.task[data-id="'+kid.id+'"]'), 'sub-task is NOT a separate top-level tile']);
+    RESULTS.push([!!document.querySelector('.task[data-id=par] .checklist .subitem'), 'sub-task shows as a checklist item on the parent tile']);
+    document.querySelector('.subitem [data-action=toggle][data-id="'+kid.id+'"]').click();
+    RESULTS.push([store.getState().tasks.find(function(t){return t.id===kid.id;}).status==='done', 'checking a checklist item completes the sub-task']);
+    var si = document.querySelector('#sub-par'); si.value='Draft narrative'; document.querySelector('[data-action=addSub][data-id=par]').click();
+    RESULTS.push([store.getState().tasks.some(function(t){return t.parentId==='par' && t.title==='Draft narrative';}), 'the "+ step" input adds a sub-task']);
   `);
 
   let pass = 0, fail = 0;

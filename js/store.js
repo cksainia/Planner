@@ -124,8 +124,9 @@ export function completeTask(id) {
   if (!t || t.status === 'done') return t;
   t.status = 'done';
   t.completedAt = new Date().toISOString();
-  // auto-credit a win (reflection loop)
-  addWin({ text: 'Completed: ' + t.title, taskId: id, goalId: t.goalIds[0] || null }, { push: false });
+  // auto-credit a win (reflection loop) — but not for sub-tasks (checklist items,
+  // which would otherwise spam the wins list with tiny steps).
+  if (!t.parentId) addWin({ text: 'Completed: ' + t.title, taskId: id, goalId: t.goalIds[0] || null }, { push: false });
   if (t.recur && t.recur !== 'none') spawnRecurrence(t);
   save();
   return t;
@@ -151,6 +152,14 @@ function spawnRecurrence(t) {
   });
   state.tasks.push(child);
   t.spawnedNextId = child.id;
+}
+
+// Add a checklist sub-task under a parent (inherits goal/context; stays off the
+// top-level lists — it only shows nested on the parent tile).
+export function addSubtask(parentId, title) {
+  const p = state.tasks.find((x) => x.id === parentId);
+  if (!p || !title || !String(title).trim()) return null;
+  return upsertTask({ title: String(title).trim(), parentId, goalIds: p.goalIds, context: p.context, priority: p.priority, effortMins: 15, bucket: 'later' });
 }
 
 // --- methodology mutators (AI-Planner) ---

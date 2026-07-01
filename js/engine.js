@@ -43,7 +43,7 @@ export function eligibleTasks(state, today) {
   const isDone = (id) => byId[id] && byId[id].status === 'done';
   return state.tasks.filter((t) => {
     if (t.status === 'done') return false;
-    if (t.parentId && !isDone(t.parentId)) { /* sub-tasks still eligible alongside parent */ }
+    if (t.parentId && byId[t.parentId]) return false; // sub-tasks are checklist items on their parent tile, not standalone
     const deps = (t.deps || []).filter((d) => byId[d]); // ignore dangling deps
     return deps.every(isDone);
   });

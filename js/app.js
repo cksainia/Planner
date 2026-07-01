@@ -58,6 +58,27 @@ function checkMark(size = 24) {
 function bookFinishedIcon() {
   return `<svg class="ic" width="17" height="17" viewBox="0 0 20 20"><circle cx="10" cy="10" r="10" fill="var(--good)"/><path d="M6 10.3l2.6 2.6 5.4-5.6" stroke="var(--bg)" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
+// Plain checkmark glyph (square sub-task checkbox, no disc).
+function checkGlyph(size = 14) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12.5l4 4 8-9"/></svg>`;
+}
+// Is this task a sub-task (checklist item) of an existing task?
+function isChildOf(st, t) { return !!(t.parentId && st.tasks.some((x) => x.id === t.parentId)); }
+// Direct children (checklist steps) of a task.
+function childrenOf(st, id) { return st.tasks.filter((c) => c.parentId === id); }
+// The inline sub-task checklist for a tile. `board` adds an "add a step" input.
+function subtaskChecklist(st, parent, board) {
+  const kids = childrenOf(st, parent.id);
+  if (!kids.length && !board) return '';
+  const items = kids.map((c) => `<div class="subitem ${c.status === 'done' ? 'done' : ''}">
+      <button class="subchk ${c.status === 'done' ? 'done' : ''}" data-action="toggle" data-id="${c.id}" aria-label="${c.status === 'done' ? 'Uncheck step' : 'Check step'}">${c.status === 'done' ? checkGlyph(14) : ''}</button>
+      <span class="subttl">${esc(c.title)}</span>
+      <button class="subx" data-action="deleteTask" data-id="${c.id}" aria-label="Delete step">×</button>
+    </div>`).join('');
+  const add = board ? `<div class="subadd"><input id="sub-${parent.id}" class="subinput" placeholder="Add a step…" aria-label="Add a step"><button class="subaddbtn" data-action="addSub" data-id="${parent.id}" aria-label="Add step">${icon('arrow', 12)}</button></div>` : '';
+  if (!items && !add) return '';
+  return `<div class="checklist">${items}${add}</div>`;
+}
 
 // One stable hue per goal (assigned by creation order; cycles a 5-hue palette).
 const GOAL_HUES = ['oklch(72% 0.15 264)', 'oklch(72% 0.15 190)', 'oklch(72% 0.15 150)', 'oklch(72% 0.15 55)', 'oklch(72% 0.15 320)'];
@@ -343,12 +364,12 @@ function viewTasks() {
 function tasksByGoal(st, openAction) {
   let html = '';
   for (const g of st.goals) {
-    const ts = goalTasks(st, g.id);
+    const ts = goalTasks(st, g.id).filter((t) => !isChildOf(st, t)); // sub-tasks show nested, not here
     if (!ts.length) continue;
     const done = ts.filter((t) => t.status === 'done').length;
     html += taskGroup(goalColor(st, g.id), esc(g.title.split(':')[0]), `${done}/${ts.length}`, ts, openAction);
   }
-  const standalone = st.tasks.filter((t) => !(t.goalIds || []).length);
+  const standalone = st.tasks.filter((t) => !(t.goalIds || []).length && !isChildOf(st, t));
   if (standalone.length) html += taskGroup('var(--muted3)', 'Standalone', '', standalone, openAction);
   return html || '<p class="muted small">No tasks yet.</p>';
 }
@@ -356,32 +377,32 @@ function taskGroup(color, title, count, tasks, openAction) {
   const order = { p1: 0, p2: 1, p3: 2, p4: 3 };
   const sorted = tasks.slice().sort((a, b) => (a.status === 'done') - (b.status === 'done') || (order[a.priority] - order[b.priority]));
   return `<div class="grp"><div class="grphead">${color ? `<span class="gdot" style="background:${color}"></span>` : ''}<strong>${title}</strong>${count ? `<span class="muted small">${count}</span>` : ''}</div>
-    <div class="list">${sorted.map((t) => taskRow(t, { openAction, selected: t.id === selectedTaskId })).join('')}</div></div>`;
+    <div class="list">${sorted.map((t) => taskRow(t, { openAction, selected: t.id === selectedTaskId, board: true })).join('')}</div></div>`;
 }
 
 function tasksInbox(st) {
-  const inbox = st.tasks.filter((t) => t.bucket === 'inbox' && t.status !== 'done');
+  const inbox = st.tasks.filter((t) => t.bucket === 'inbox' && t.status !== 'done' && !isChildOf(st, t));
   if (!inbox.length) return `<p class="muted" style="text-align:center;margin:28px 8px">Inbox zero — nicely done.</p>`;
   return `<p class="muted small">Triage: send each to a day, or open to tag a goal.</p><div class="list">${inbox.map((t) => `
-    <div class="task" data-id="${t.id}">
+    <div class="task" data-id="${t.id}"><div class="trow">
       <button class="chk" data-action="toggle" data-id="${t.id}" aria-label="Mark done"></button>
       <div class="tbody" data-action="edit" data-id="${t.id}"><div class="ttitle">${esc(t.title)}</div></div>
       <div class="triage">
         <button class="btn xs solid" data-action="bucket" data-id="${t.id}" data-b="today">Today</button>
         <button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="tomorrow">Tmrw</button>
-      </div></div>`).join('')}</div>`;
+      </div></div></div>`).join('')}</div>`;
 }
 
 function tasksBuckets(st, openAction) {
   return ['today', 'tomorrow', 'later', 'someday', 'inbox'].map((b) => {
-    const ts = st.tasks.filter((t) => t.bucket === b && t.status !== 'done');
+    const ts = st.tasks.filter((t) => t.bucket === b && t.status !== 'done' && !isChildOf(st, t));
     if (!ts.length) return '';
     return taskGroup(null, BUCKET_LABEL[b], String(ts.length), ts, openAction);
   }).join('') || `<p class="muted small">No open tasks.</p>`;
 }
 
 function tasksMatrix(st) {
-  const open = st.tasks.filter((t) => t.status !== 'done');
+  const open = st.tasks.filter((t) => t.status !== 'done' && !isChildOf(st, t));
   const colors = { qdo: 'var(--danger)', qsched: 'var(--accent)', qdel: 'var(--warn)', qdrop: 'var(--muted)' };
   const quads = [
     { k: 'qdo', label: 'Do first', f: (t) => t.important && t.urgent },
@@ -420,22 +441,26 @@ function detailPanel() {
     <div class="toggles ctxgrid">${ctxBtns}</div>
     <label class="fld">When</label>
     <div class="toggles wrap">${bkBtns}</div>
+    <label class="fld">Steps</label>
+    ${subtaskChecklist(st, t, true)}
     <div class="btnrow"><button class="focuspill" style="flex:1;justify-content:center" data-action="focus" data-id="${t.id}">${icon('play', 11)}Focus</button><button class="danger" data-action="deleteTask" data-id="${t.id}">Delete</button></div>
   </div>`;
 }
 
-function taskRow(t, { showEffort = false, compact = false, focus = false, openAction = 'edit', selected = false } = {}) {
+function taskRow(t, { showEffort = false, compact = false, focus = false, openAction = 'edit', selected = false, board = false } = {}) {
   const st = S();
   const gid = (t.goalIds || [])[0];
   const goal = st.goals.find((g) => g.id === gid);
   const gc = goalColor(st, gid);
   const big = isBig(t, st.settings.bigTaskThreshold);
   const eff = showEffort ? todayEffort(t, st.settings.bigTaskThreshold) : t.effortMins;
+  const kids = childrenOf(st, t.id);
   const meta = [`<span class="pdot ${t.priority}" title="${PRI_LABEL[t.priority]}"></span>`];
   if (t.context) meta.push(`<span class="mi ctx" title="${esc(t.context)}">${icon(t.context)}</span>`);
   if (eff) meta.push(`<span class="mi">${icon('clock', 12)}${eff}m</span>`);
   if (t.deadline) meta.push(`<span class="mi hard">${icon('dueHard', 12)}${esc(t.deadline)}</span>`);
   else if (t.dueDate) meta.push(`<span class="mi">${icon('dueSoft', 12)}${esc(t.dueDate)}</span>`);
+  if (kids.length) meta.push(`<span class="mi">${icon('tasks', 12)} ${kids.filter((c) => c.status === 'done').length}/${kids.length}</span>`);
   if (t.depth === 'deep') meta.push(`<span class="deepchip">${icon('bolt', 10)}deep</span>`);
   if (t.important) meta.push(`<span class="flagi imp" title="Important">${icon('star', 12)}</span>`);
   if (t.urgent) meta.push(`<span class="flagi urg" title="Urgent">${icon('urgent', 12)}</span>`);
@@ -443,14 +468,17 @@ function taskRow(t, { showEffort = false, compact = false, focus = false, openAc
   if (goal) meta.push(`<span class="goaltag" style="--goalc:${gc}">${esc(goal.title.split(':')[0].split('&')[0].trim())}</span>`);
 
   return `<div class="task ${t.status === 'done' ? 'done' : ''} ${selected ? 'sel' : ''}" data-id="${t.id}" style="--goalc:${gc}">
-    <button class="chk ${t.status === 'done' ? 'done' : ''}" data-action="toggle" data-id="${t.id}" aria-label="${t.status === 'done' ? 'Mark not done' : 'Mark done'}">${t.status === 'done' ? checkMark(24) : ''}</button>
-    <div class="tbody" data-action="${openAction}" data-id="${t.id}">
-      <div class="ttitle">${t.ref ? `<span class="ref">${esc(t.ref)}</span> ` : ''}${esc(t.title)}</div>
-      <div class="meta">${meta.join('')}</div>
-      ${t.nextAction ? `<div class="next">${icon('arrow', 11)}${esc(t.nextAction)}</div>` : ''}
-      ${big && !compact ? `<button class="breakdown" data-action="decompose" data-id="${t.id}">${icon('bolt', 10)}Break it down</button>` : ''}
+    <div class="trow">
+      <button class="chk ${t.status === 'done' ? 'done' : ''}" data-action="toggle" data-id="${t.id}" aria-label="${t.status === 'done' ? 'Mark not done' : 'Mark done'}">${t.status === 'done' ? checkMark(24) : ''}</button>
+      <div class="tbody" data-action="${openAction}" data-id="${t.id}">
+        <div class="ttitle">${t.ref ? `<span class="ref">${esc(t.ref)}</span> ` : ''}${esc(t.title)}</div>
+        <div class="meta">${meta.join('')}</div>
+        ${t.nextAction ? `<div class="next">${icon('arrow', 11)}${esc(t.nextAction)}</div>` : ''}
+        ${big && !compact ? `<button class="breakdown" data-action="decompose" data-id="${t.id}">${icon('bolt', 10)}Break it down</button>` : ''}
+      </div>
+      ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer" aria-label="Start focus timer">${icon('play', 12)}</button>` : ''}
     </div>
-    ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer" aria-label="Start focus timer">${icon('play', 12)}</button>` : ''}
+    ${subtaskChecklist(st, t, board)}
   </div>`;
 }
 
@@ -702,11 +730,11 @@ function viewReflect() {
 }
 function weeklyReviewBody(st) {
   const today = store.todayStr();
-  const stale = st.tasks.filter((t) => t.status !== 'done' && (
+  const stale = st.tasks.filter((t) => t.status !== 'done' && !isChildOf(st, t) && (
     (t.deadline || t.dueDate) && store.addDays(t.deadline || t.dueDate, 0) < today
     || (t.bucket === 'later' && t.createdAt && t.createdAt.slice(0, 10) <= store.addDays(today, -21))));
-  const list = stale.slice(0, 12).map((t) => `<div class="task"><div class="tbody"><div class="ttitle">${esc(t.title)}</div></div>
-    <div class="triage"><button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button><button class="btn xs ghost" data-action="bucket" data-id="${t.id}" data-b="someday">Someday</button></div></div>`).join('');
+  const list = stale.slice(0, 12).map((t) => `<div class="task"><div class="trow"><div class="tbody"><div class="ttitle">${esc(t.title)}</div></div>
+    <div class="triage"><button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button><button class="btn xs ghost" data-action="bucket" data-id="${t.id}" data-b="someday">Someday</button></div></div></div>`).join('');
   return `<div class="muted small" style="margin:8px 0">${stale.length} stale / overdue task${stale.length === 1 ? '' : 's'} to triage:</div>
     <div class="list">${list || '<span class="muted small">Nothing stale — great shape.</span>'}</div>
     <button class="primary" style="margin-top:12px" data-action="finishWeekly">Finish weekly review</button>`;
@@ -987,6 +1015,7 @@ function wire() {
   const imp = $('#importFile'); if (imp) imp.addEventListener('change', onImport);
   const q = $('#quickIn'); if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doQuickAdd(); });
   const bk = $('#bookIn'); if (bk) bk.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const t = bk.value.trim(); if (t) store.upsertBook({ title: t }); } });
+  app().querySelectorAll('.subinput').forEach((el) => el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = el.value.trim(); if (v) store.addSubtask(el.id.slice(4), v); } }));
   if (view === 'weight') {
     const lo = $('#wf-lo'); if (lo) lo.addEventListener('input', (e) => onWeightSlider('lo', e.target.value));
     const hi = $('#wf-hi'); if (hi) hi.addEventListener('input', (e) => onWeightSlider('hi', e.target.value));
@@ -1037,6 +1066,7 @@ async function onClick(e) {
     case 'cycleBook': { const b = (st.books || []).find((x) => x.id === id); if (b) { const nx = { unread: 'reading', reading: 'finished', finished: 'unread' }[b.status] || 'reading'; store.upsertBook({ id: b.id, status: nx, finishedDate: nx === 'finished' ? store.todayStr() : null }); } break; }
     case 'delBook': store.deleteBook(id); break;
     case 'habit': store.toggleHabit(id); break;
+    case 'addSub': { const el = $('#sub-' + id); const v = (el && el.value || '').trim(); if (v) store.addSubtask(id, v); break; }
     case 'mic': toggleMic(btn.dataset.target, btn); break;
     case 'openWeight': view = 'weight'; render(); break;
     case 'wfRange': {
