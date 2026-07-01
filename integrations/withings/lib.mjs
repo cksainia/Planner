@@ -26,13 +26,23 @@ export async function withingsToken(params) {
   return j.body; // { access_token, refresh_token, userid, expires_in }
 }
 
-// Fetch weight measurements (meastype 1) since `sinceEpoch`. Returns {date->lbs} (latest per day).
+// Fetch weight measurements (meastype 1) since `sinceEpoch`, following Withings'
+// pagination (`more`/`offset`). Returns {date->lbs} (latest weigh-in per day).
 export async function fetchWeights(accessToken, sinceEpoch) {
-  const body = new URLSearchParams({ action: 'getmeas', meastype: '1', category: '1', startdate: String(sinceEpoch) });
-  const r = await fetch(MEAS_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/x-www-form-urlencoded' }, body });
-  const j = await r.json();
-  if (j.status !== 0) throw new Error('Withings getmeas error: ' + JSON.stringify(j));
-  const grps = (j.body.measuregrps || []).slice().sort((a, b) => a.date - b.date); // oldest first
+  const all = [];
+  let offset = 0, more = true, guard = 0;
+  while (more && guard++ < 200) {
+    const params = { action: 'getmeas', meastype: '1', category: '1', startdate: String(sinceEpoch) };
+    if (offset) params.offset = String(offset);
+    const r = await fetch(MEAS_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params) });
+    const j = await r.json();
+    if (j.status !== 0) throw new Error('Withings getmeas error: ' + JSON.stringify(j));
+    all.push(...(j.body.measuregrps || []));
+    more = j.body.more === 1 || j.body.more === true;
+    offset = j.body.offset || 0;
+    if (!offset) more = false;
+  }
+  const grps = all.sort((a, b) => a.date - b.date); // oldest first
   const byDate = {};
   for (const g of grps) {
     const m = (g.measures || []).find((x) => x.type === 1);
