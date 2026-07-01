@@ -159,6 +159,79 @@
   ok(qa && qa.bucket === 'inbox' && qa.urgent === true && qa.context === 'home' && qa.effortMins === 15, 'quickAdd captures to inbox with parsed flags');
 })();
 
+// ---------------- QA: edge cases ----------------
+(function () {
+  // parser edge cases
+  ok(parseQuick('!! ~ 30m', {}).title === '', 'parser: tokens-only yields empty title');
+  ok(parseQuick('Ping @bogus team', {}).title === 'Ping @bogus team', 'parser: unknown @context stays in title');
+  ok(parseQuick('Report 1h 30m', {}).effortMins === 90, 'parser: multiple estimates sum (1h+30m)');
+  ok(parseQuick('Read book', {}).bucket === undefined, 'parser: no bucket token -> undefined (defaults later/inbox downstream)');
+
+  // store: quickAdd guards + toggles
+  importState({ goals: [{ id: 'g1', title: 'G', weight: 3 }], tasks: [], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  ok(quickAdd('   ') === null, 'quickAdd: blank input returns null (no task created)');
+  ok(quickAdd('!! ~') === null, 'quickAdd: tokens-only (no title) returns null');
+  var qt = quickAdd('Design review ~ #Roadmap 45m');
+  ok(qt && qt.depth === 'deep' && qt.effortMins === 45, 'quickAdd: parses depth + estimate');
+  ok(getState().projects.some(function (p) { return p.title === 'Roadmap'; }), 'quickAdd: #project auto-creates the project');
+  toggleFlag(qt.id, 'important'); ok(getState().tasks.find(function (x) { return x.id === qt.id; }).important === true, 'toggleFlag flips important on');
+  toggleFlag(qt.id, 'important'); ok(getState().tasks.find(function (x) { return x.id === qt.id; }).important === false, 'toggleFlag flips important off');
+  setDepth(qt.id, 'shallow'); ok(getState().tasks.find(function (x) { return x.id === qt.id; }).depth === 'shallow', 'setDepth normalizes');
+
+  // delete cascades subtasks
+  var par = upsertTask({ id: 'par', title: 'parent' });
+  upsertTask({ id: 'kid', title: 'child', parentId: 'par' });
+  deleteTask('par');
+  ok(!getState().tasks.find(function (x) { return x.id === 'par' || x.id === 'kid'; }), 'deleteTask cascades to subtasks');
+
+  // recurrence with NO dates -> spawns a later task, no due, recur preserved
+  var rec2 = upsertTask({ id: 'rec2', title: 'weekly sync', recur: 'weekly', bucket: 'later' });
+  var n0 = getState().tasks.length;
+  completeTask('rec2');
+  var sp = getState().tasks.filter(function (x) { return x.id !== 'rec2' && x.title === 'weekly sync'; })[0];
+  ok(getState().tasks.length === n0 + 1 && sp && sp.recur === 'weekly' && sp.dueDate === null && sp.bucket === 'later', 'recurrence w/o dates spawns clean later task');
+
+  // import roundtrip preserves methodology fields
+  importState({ goals: [], tasks: [{ id: 'z', title: 'z', bucket: 'today', important: true, depth: 'deep', urgent: true }], seedVersion: 1 }, { markSeed: true });
+  var z = getState().tasks.find(function (x) { return x.id === 'z'; });
+  ok(z.bucket === 'today' && z.important === true && z.urgent === true && z.depth === 'deep', 'import preserves bucket/important/urgent/depth');
+
+  // doRollover first-ever run does NOT promote (no prior day)
+  getState().lastRollover = null;
+  upsertTask({ id: 'tm2', title: 'tmrw', bucket: 'tomorrow' });
+  var ran1 = doRollover('2026-07-01');
+  ok(ran1 === true && getState().tasks.find(function (x) { return x.id === 'tm2'; }).bucket === 'tomorrow', 'first-ever rollover records date but does not promote');
+})();
+
+// ---------------- QA: engine edge cases ----------------
+(function () {
+  var st = emptyState();
+  st.goals = [normGoal({ id: 'g1', title: 'G', weight: 3 })];
+  var T = '2026-07-01';
+  // a 'tomorrow'-bucket task that IS the frog must appear on today's plate
+  st.tasks = [normTask({ id: 'ft', title: 'frog-in-tomorrow', goalIds: ['g1'], bucket: 'tomorrow', effortMins: 30 })];
+  st.frogByDate = {}; st.frogByDate[T] = 'ft';
+  var r = buildDailyList(st, { today: T, budgetMins: 120 });
+  ok(r.mustDo.some(function (i) { return i.task.id === 'ft'; }), 'frog in tomorrow bucket still lands on today');
+  ok(r.frogId === 'ft', 'buildDailyList reports the frog id');
+
+  // suggestFrog prefers an important task
+  st.frogByDate = {};
+  st.tasks = [normTask({ id: 'lo', title: 'low', goalIds: ['g1'], bucket: 'later', priority: 'p4', effortMins: 20 }),
+    normTask({ id: 'hi', title: 'important', goalIds: ['g1'], bucket: 'later', important: true, priority: 'p3', effortMins: 20 })];
+  ok(suggestFrog(st, { today: T }).task.id === 'hi', 'suggestFrog prefers an important task');
+
+  // planDay never schedules past work end
+  st.settings.workStart = '09:00'; st.settings.workEnd = '10:00'; // only 60 min
+  st.tasks = [normTask({ id: 'a', title: 'a', goalIds: ['g1'], bucket: 'later', effortMins: 40 }),
+    normTask({ id: 'b', title: 'b', goalIds: ['g1'], bucket: 'later', effortMins: 40 }),
+    normTask({ id: 'c', title: 'c', goalIds: ['g1'], bucket: 'later', effortMins: 40 })];
+  var pd = planDay(st, { today: T });
+  var pastEnd = pd.slots.some(function (s) { return s.end > 10 * 60; });
+  ok(!pastEnd, 'planDay never schedules past work end');
+})();
+
 // ---------------- DASHBOARD ----------------
 (function () {
   var ds = emptyState();

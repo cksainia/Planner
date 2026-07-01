@@ -115,10 +115,10 @@ function viewToday() {
   const st = S();
   if (store.needsSeed()) return emptyStateCard();
   const today = store.todayStr();
-  // ensure a frog is chosen for the day
+  // ensure a frog is chosen for the day (re-pick if the chosen one was deleted)
   let frogId = store.getFrogId(today);
-  if (!frogId) { const sug = suggestFrog(st, {}); if (sug.task) { store.setFrog(sug.task.id, today); frogId = sug.task.id; } }
-  const frog = st.tasks.find((t) => t.id === frogId);
+  let frog = frogId ? st.tasks.find((t) => t.id === frogId) : null;
+  if (!frog) { const sug = suggestFrog(st, {}); if (sug.task) { store.setFrog(sug.task.id, today); frogId = sug.task.id; frog = sug.task; } else { frogId = null; } }
 
   const budget = st.settings.dailyBudgetMins;
   const plan = st.dailyPlan[today] || {};
@@ -432,6 +432,7 @@ function saveTaskFromEditor() {
 
 // ---------- pomodoro (overlay) ----------
 function openFocus(taskId) {
+  if (pomo && pomo.timer) clearInterval(pomo.timer); // guard against a leftover timer
   const st = S();
   const t = taskId ? st.tasks.find((x) => x.id === taskId) : null;
   const mins = st.settings.pomoMins || 25;
