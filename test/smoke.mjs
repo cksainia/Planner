@@ -9,7 +9,9 @@ const { JSDOM } = require('jsdom');
 
 const BASE = '/Users/matrix/Documents/Claude/Projects/Life Planner/app/';
 const read = (f) => readFileSync(BASE + f, 'utf8');
-const strip = (s) => s.replace(/import[\s\S]*?from\s*['"][^'"]+['"];?/g, '').replace(/^\s*export\s+/gm, '');
+// Strip ONLY real ES import statements (line-start `import … from '…';`, incl.
+// multi-line) — not mid-line identifiers like `store.importState(...)`.
+const strip = (s) => s.replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?/gm, '').replace(/^\s*export\s+/gm, '');
 
 // --- simulated environment ---
 const dom = new JSDOM('<!DOCTYPE html><html><body><div id="app"></div></body></html>', { url: 'https://cksainia.github.io/Planner/' });
@@ -155,6 +157,21 @@ try {
     document.querySelector('[data-action=detImportant]').click();
     RESULTS.push([!!store.getState().tasks.find(function(t){return t.id===selId;}).important !== impBefore, 'wide: detail Important toggle applies live']);
     WIDE_MATCH = false;
+
+    // 13) Weight analytics screen (Withings-fed; manual logging removed)
+    store.importState({ goals:[{id:'gw',title:'Reach 165',metric:'weight',baseline:200,target:35}], tasks:[], weightLog:[{date:'2025-06-01',lbs:200},{date:'2026-01-02',lbs:196},{date:'2026-03-01',lbs:190},{date:'2026-06-30',lbs:184}], seedVersion:1 }, { markSeed:true });
+    store.applyCloud(null);
+    view='goals'; render();
+    RESULTS.push([!document.querySelector('#wIn'), 'manual weight logging is removed from Goals']);
+    RESULTS.push([!!document.querySelector('[data-action=openWeight]'), 'Goals shows a weight Analytics link']);
+    document.querySelector('[data-action=openWeight]').click();
+    RESULTS.push([view==='weight' && !!document.querySelector('.wchart'), 'openWeight opens the weight screen with a chart']);
+    RESULTS.push([!!document.querySelector('#wf-lo') && !!document.querySelector('#wf-hi'), 'weight chart has From/To range sliders']);
+    RESULTS.push([/[0-9]/.test(document.querySelector('#wf-change').textContent), 'in-range change figure is populated']);
+    document.querySelector('[data-action=wfRange][data-days=all]').click();
+    RESULTS.push([document.querySelector('#wf-lo').value==='0', 'the "All" preset widens the slider to the full history']);
+    var loEl=document.querySelector('#wf-lo'); loEl.value='2'; loEl.dispatchEvent(new dom.window.Event('input'));
+    RESULTS.push([!!document.querySelector('.wchart'), 'moving the From slider redraws the chart in place']);
   `);
 
   let pass = 0, fail = 0;

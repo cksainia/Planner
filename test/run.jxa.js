@@ -16,7 +16,7 @@ function read(rel) {
 }
 function strip(src) {
   return src
-    .replace(/import[\s\S]*?from\s*['"][^'"]+['"];?/g, '') // drop whole (multi-line) imports
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?/gm, '') // drop line-start (multi-line) imports only
     .replace(/^\s*export\s+/gm, '');                       // drop the export keyword
 }
 

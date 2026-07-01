@@ -27,7 +27,8 @@ export async function withingsToken(params) {
 }
 
 // Fetch weight measurements (meastype 1) since `sinceEpoch`, following Withings'
-// pagination (`more`/`offset`). Returns {date->lbs} (latest weigh-in per day).
+// pagination (`more`/`offset`). Returns {date->lbs} — the LOWEST reading per day
+// (multiple weigh-ins in a day are common; the lowest is the fairest daily figure).
 export async function fetchWeights(accessToken, sinceEpoch) {
   const all = [];
   let offset = 0, more = true, guard = 0;
@@ -51,7 +52,7 @@ export async function fetchWeights(accessToken, sinceEpoch) {
     const lbs = Math.round(kg * 2.2046226 * 10) / 10;
     const d = new Date(g.date * 1000);
     const date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    byDate[date] = lbs; // later group (higher epoch) overwrites -> latest weigh-in of the day wins
+    if (byDate[date] === undefined || lbs < byDate[date]) byDate[date] = lbs; // keep the lowest weigh-in of the day
   }
   return byDate;
 }

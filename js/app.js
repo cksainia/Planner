@@ -5,7 +5,7 @@
 import * as store from './store.js';
 import { buildDailyList, scoreTask, eligibleTasks, isBig, todayEffort, suggestFrog, planDay, quadrant, minToTime } from './engine.js';
 import { computeStreak, daySummary, mustDoStatus, rollup } from './reflection.js';
-import { dashboard, goalProgress, goalTasks } from './dashboard.js';
+import { dashboard, goalProgress, goalTasks, weightSeries, weightStats } from './dashboard.js';
 import * as ai from './ai.js';
 import { initFirebase, isConfigured, onAuth, signInWithGoogle, signOutUser, watchDoc, writeDoc } from './firebase.js';
 
@@ -169,7 +169,7 @@ function renderInner() {
   const focusId = samePage && active && active.id && app().contains(active) ? active.id : null;
   const caret = (focusId && 'selectionStart' in active) ? active.selectionStart : null;
 
-  const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, reflect: viewReflect, settings: viewSettings }[view] || viewToday;
+  const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, reflect: viewReflect, settings: viewSettings, weight: viewWeight }[view] || viewToday;
   if (isWide()) app().innerHTML = wideShell(body);
   else app().innerHTML = `
     <header class="topbar">
@@ -207,7 +207,7 @@ function tab(viewId, iconName, label) {
 // iPad frame: persistent sidebar + titled main pane (replaces the bottom tab bar).
 function wideShell(body) {
   const st = S();
-  const title = { today: 'Today', tasks: 'Tasks', goals: 'Goals', reflect: 'Reflect', settings: 'Setup' }[view] || 'Today';
+  const title = { today: 'Today', tasks: 'Tasks', goals: 'Goals', reflect: 'Reflect', settings: 'Setup', weight: 'Weight' }[view] || 'Today';
   const nav = NAV.map(([id, label]) => {
     const vid = id === 'setup' ? 'settings' : id;
     return `<button class="navbtn ${view === vid ? 'on' : ''}" data-nav="${vid}">${icon(id, 18)}<span>${label}</span></button>`;
@@ -465,6 +465,7 @@ function viewGoals() {
       <div class="gbar"><span style="width:${progress.pct}%;background:${c}"></span></div>
       <div class="muted small">${esc(progress.label)}${progress.detail ? ' · ' + esc(progress.detail) : ''}</div>
       ${progress.spark && progress.spark.length ? sparkline(progress.spark, c) : ''}
+      ${goal.metric === 'weight' ? '<button class="ghost small" data-action="openWeight">View analytics →</button>' : ''}
     </div>`;
   }).join('') || '<p class="muted small">No goals yet — add your first one.</p>';
   const head = `<div class="row between" style="margin:2px 2px 10px"><h3 class="sech" style="margin:0">Goals</h3><button class="ghost" data-action="newGoal">+ Goal</button></div>`;
@@ -496,10 +497,14 @@ function trackersBlock() {
   const today = store.todayStr();
   const habits = st.settings.habits || [];
   const hd = st.habitsDaily[today] || {};
-  const lastW = (st.weightLog[st.weightLog.length - 1] || {}).lbs;
+  const series = weightSeries(st);
+  const last = series[series.length - 1];
   return `<section class="card"><h3 class="sech tight">Daily trackers</h3>
     <div class="habits">${habits.map((h) => `<button class="habit ${hd[h.id] ? 'on' : ''}" data-action="habit" data-id="${h.id}">${esc(h.label)}</button>`).join('') || '<span class="muted small">No habits configured.</span>'}</div>
-    <div class="row weight"><label>Weight today (lbs) <input type="number" min="1" step="0.1" id="wIn" placeholder="${lastW != null ? lastW : 'lbs'}"></label><button class="ghost" data-action="logWeight" aria-label="Log today's weight">Log</button></div>
+    <div class="row between" style="margin-top:14px;align-items:center">
+      <div><div class="muted small">Weight · synced from Withings</div><div style="font-size:20px;font-weight:700">${last ? last.lbs + ' <span class="muted small" style="font-weight:400">lb</span>' : '—'}</div></div>
+      <button class="ghost" data-action="openWeight">Analytics →</button>
+    </div>
   </section>`;
 }
 function rollupBlock() {
@@ -513,6 +518,138 @@ function sparkline(vals, color = 'var(--good)') {
   const w = 220, h = 34, min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - min) / span) * (h - 4) - 2}`).join(' ');
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" style="stroke:${color}"/></svg>`;
+}
+
+// ---------- WEIGHT ANALYTICS (Withings-fed, interactive) ----------
+let weightUI = null; // { series, goalWeight, lo, hi, preset } — drives the interactive chart
+
+function weightGoalTarget(st, series) {
+  const goal = st.goals.find((g) => g.metric === 'weight');
+  if (!goal) return { goalWeight: null, baseline: series.length ? series[0].lbs : null, toLose: null };
+  const baseline = goal.baseline != null ? goal.baseline : (series.length ? series[0].lbs : null);
+  const toLose = goal.target != null ? goal.target : null;
+  const goalWeight = (baseline != null && toLose != null) ? Math.round((baseline - toLose) * 10) / 10 : null;
+  return { goalWeight, baseline, toLose };
+}
+function fmtDelta(x, unit = 'lb') {
+  if (x == null || Number.isNaN(x)) return '—';
+  const cls = x < 0 ? 'down' : x > 0 ? 'up' : '';
+  const sign = x < 0 ? '−' : x > 0 ? '+' : '';
+  return `<span class="wdelta ${cls}">${sign}${Math.abs(x)} ${unit}</span>`;
+}
+function fullDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
+function monthYear(s) { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' }); }
+
+function viewWeight() {
+  const st = S();
+  const series = weightSeries(st);
+  const back = `<button class="ghost" data-nav="goals" aria-label="Back to Goals">← Goals</button>`;
+  const head = `<div class="wxhead">${back}<h2 class="wxtitle">Weight analytics</h2></div>`;
+  if (series.length < 2) return `${head}<section class="card"><p class="muted">Not enough weigh-ins yet. Your Withings scale syncs automatically — data will appear here.</p></section>`;
+
+  const n = series.length;
+  const cur = series[n - 1];
+  const year = +cur.date.slice(0, 4);
+  const { goalWeight, baseline, toLose } = weightGoalTarget(st, series);
+  const ytd = weightStats(series, year + '-01-01', cur.date);
+  const lastYr = weightStats(series, (year - 1) + '-01-01', (year - 1) + '-12-31');
+  const allTime = weightStats(series, null, null);
+  const r30 = weightStats(series, store.addDays(cur.date, -30), cur.date);
+  const r90 = weightStats(series, store.addDays(cur.date, -90), cur.date);
+
+  const lostTotal = baseline != null ? Math.round((baseline - cur.lbs) * 10) / 10 : null;
+  const remaining = goalWeight != null ? Math.round((cur.lbs - goalWeight) * 10) / 10 : null;
+  const goalPct = (toLose && lostTotal != null) ? Math.max(0, Math.min(100, Math.round((lostTotal / toLose) * 100))) : null;
+  let projection = 'Keep going';
+  if (remaining != null && remaining > 0.1) {
+    if (r90.perWeek < -0.05) { const weeks = remaining / Math.abs(r90.perWeek); projection = '~' + monthYear(store.addDays(cur.date, Math.round(weeks * 7))); }
+    else projection = 'Trend has stalled';
+  } else if (remaining != null && remaining <= 0.1) projection = 'Goal reached 🎉';
+
+  // set up the interactive chart state (preserve the user's selection across re-renders)
+  const prev = weightUI;
+  weightUI = { series, goalWeight, lo: 0, hi: n - 1, preset: 'all' };
+  if (prev && prev.hi <= n - 1 && prev.lo <= prev.hi && prev.series && prev.series.length === n) {
+    weightUI.lo = prev.lo; weightUI.hi = prev.hi; weightUI.preset = prev.preset;
+  } else {
+    const start = store.addDays(cur.date, -365); const lo = series.findIndex((e) => e.date >= start);
+    weightUI.lo = lo < 0 ? 0 : lo; weightUI.preset = '1y';
+  }
+
+  const stat = (label, value, sub = '') => `<div class="wstat"><div class="wslabel">${label}</div><div class="wsval">${value}</div>${sub ? `<div class="wssub">${sub}</div>` : ''}</div>`;
+  const stats = `<div class="wstats">
+    ${stat('Current', `${cur.lbs} <span class="wunit">lb</span>`, fullDate(cur.date))}
+    ${goalWeight != null ? stat('Goal', `${goalWeight} <span class="wunit">lb</span>`, remaining > 0 ? fmtDelta(-remaining, 'lb') + ' to go' : 'reached') : ''}
+    ${stat('This year', ytd.count > 1 ? fmtDelta(ytd.change) : '—', ytd.count > 1 ? 'since ' + fullDate(ytd.first.date) : 'no data yet')}
+    ${stat('Last year', lastYr.count > 1 ? fmtDelta(lastYr.change) : '—', lastYr.count > 1 ? (year - 1) + ' full year' : 'no data')}
+    ${stat('All time', fmtDelta(allTime.change), 'since ' + fullDate(allTime.first.date))}
+    ${stat('Rate (30d)', r30.count > 1 ? fmtDelta(r30.perWeek, 'lb/wk') : '—', 'lowest ' + allTime.min.lbs + ' lb')}
+  </div>`;
+
+  const goalBar = goalPct != null ? `<div class="wgoalprog"><div class="row between small"><span class="muted">${lostTotal} of ${toLose} lb lost · ${remaining > 0 ? remaining + ' lb to 165' : 'goal reached'}</span><span class="muted">ETA ${projection}</span></div><div class="gbar"><span style="width:${goalPct}%;background:var(--good)"></span></div></div>` : '';
+
+  const presets = [['30', '30d'], ['90', '90d'], ['ytd', 'YTD'], ['365', '1y'], ['all', 'All']]
+    .map(([d, l]) => `<button class="bchip ${weightUI.preset === (d === '365' ? '1y' : d) ? 'on' : ''}" data-action="wfRange" data-days="${d}">${l}</button>`).join('');
+
+  const chartCard = `<section class="card">
+    <div class="row between" style="margin-bottom:8px"><h3 class="sech tight" style="margin:0">Trend</h3><div class="budgetchips">${presets}</div></div>
+    <div id="wf-chart">${drawWeightChart(series.slice(weightUI.lo, weightUI.hi + 1), goalWeight)}</div>
+    <div class="wrange"><span id="wf-from">${fullDate(series[weightUI.lo].date)}</span><span id="wf-minmax" class="muted"></span><span id="wf-to">${fullDate(series[weightUI.hi].date)}</span></div>
+    <div class="wsliders">
+      <label class="wsl">From<input type="range" id="wf-lo" min="0" max="${n - 1}" value="${weightUI.lo}" step="1"></label>
+      <label class="wsl">To<input type="range" id="wf-hi" min="0" max="${n - 1}" value="${weightUI.hi}" step="1"></label>
+    </div>
+    <div class="wwin"><span>In range: <b id="wf-change"></b></span><span><b id="wf-rate"></b></span></div>
+  </section>`;
+
+  return `${head}${goalBar}${stats}${chartCard}`;
+}
+
+// Pure SVG line chart of a weigh-in slice (area + goal line + trend + last dot).
+function drawWeightChart(slice, goalWeight) {
+  if (!slice || slice.length < 2) return `<div class="muted small" style="padding:24px;text-align:center">Not enough data in this range.</div>`;
+  const W = 640, H = 220, PADX = 6, PADY = 12;
+  const vals = slice.map((e) => e.lbs);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (goalWeight != null) { lo = Math.min(lo, goalWeight); hi = Math.max(hi, goalWeight); }
+  const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  const span = (hi - lo) || 1;
+  const x = (i) => PADX + (i / (slice.length - 1)) * (W - 2 * PADX);
+  const y = (v) => PADY + (1 - (v - lo) / span) * (H - 2 * PADY);
+  const pts = slice.map((e, i) => `${x(i).toFixed(1)},${y(e.lbs).toFixed(1)}`).join(' ');
+  const area = `${x(0).toFixed(1)},${H - PADY} ${pts} ${x(slice.length - 1).toFixed(1)},${H - PADY}`;
+  const last = slice[slice.length - 1];
+  const goalLine = goalWeight != null && goalWeight > lo && goalWeight < hi
+    ? `<line x1="${PADX}" y1="${y(goalWeight).toFixed(1)}" x2="${W - PADX}" y2="${y(goalWeight).toFixed(1)}" class="wgoalline"/>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="wchart">
+    <polygon points="${area}" class="warea"/>
+    ${goalLine}
+    <polyline points="${pts}" class="wline"/>
+    <circle cx="${x(slice.length - 1).toFixed(1)}" cy="${y(last.lbs).toFixed(1)}" r="3.5" class="wdot"/>
+  </svg>`;
+}
+// Redraw chart + in-range figures in place (no full app render — keeps slider focus).
+function weightRedraw() {
+  if (!weightUI) return;
+  const slice = weightUI.series.slice(weightUI.lo, weightUI.hi + 1);
+  const chart = $('#wf-chart'); if (chart) chart.innerHTML = drawWeightChart(slice, weightUI.goalWeight);
+  const s = weightStats(slice);
+  const set = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
+  if (s.count) {
+    set('#wf-from', fullDate(s.first.date)); set('#wf-to', fullDate(s.last.date));
+    set('#wf-minmax', `${s.min.lbs}–${s.max.lbs} lb`);
+    set('#wf-change', fmtDelta(s.change)); set('#wf-rate', s.count > 1 ? fmtDelta(s.perWeek, 'lb/wk') : '—');
+  }
+}
+function onWeightSlider(which, val) {
+  if (!weightUI) return;
+  val = parseInt(val, 10);
+  if (which === 'lo') weightUI.lo = Math.min(val, weightUI.hi);
+  else weightUI.hi = Math.max(val, weightUI.lo);
+  const lo = $('#wf-lo'), hi = $('#wf-hi'); if (lo) lo.value = weightUI.lo; if (hi) hi.value = weightUI.hi;
+  weightUI.preset = null;
+  document.querySelectorAll('[data-action=wfRange]').forEach((b) => b.classList.remove('on'));
+  weightRedraw();
 }
 
 // ---------- REFLECT (nightly + weekly) ----------
@@ -764,6 +901,11 @@ function wire() {
   const imp = $('#importFile'); if (imp) imp.addEventListener('change', onImport);
   const q = $('#quickIn'); if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doQuickAdd(); });
   const bk = $('#bookIn'); if (bk) bk.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const t = bk.value.trim(); if (t) store.upsertBook({ title: t }); } });
+  if (view === 'weight') {
+    const lo = $('#wf-lo'); if (lo) lo.addEventListener('input', (e) => onWeightSlider('lo', e.target.value));
+    const hi = $('#wf-hi'); if (hi) hi.addEventListener('input', (e) => onWeightSlider('hi', e.target.value));
+    weightRedraw(); // fill the in-range figures on first paint
+  }
 }
 function doQuickAdd() {
   const el = $('#quickIn'); if (!el) return;
@@ -809,7 +951,22 @@ async function onClick(e) {
     case 'cycleBook': { const b = (st.books || []).find((x) => x.id === id); if (b) { const nx = { unread: 'reading', reading: 'finished', finished: 'unread' }[b.status] || 'reading'; store.upsertBook({ id: b.id, status: nx, finishedDate: nx === 'finished' ? store.todayStr() : null }); } break; }
     case 'delBook': store.deleteBook(id); break;
     case 'habit': store.toggleHabit(id); break;
-    case 'logWeight': { const v = parseFloat($('#wIn').value); if (!isNaN(v) && v > 0) store.logWeight(v); break; }
+    case 'openWeight': view = 'weight'; render(); break;
+    case 'wfRange': {
+      if (!weightUI) break;
+      const nn = weightUI.series.length, days = btn.dataset.days;
+      let lo = 0;
+      if (days !== 'all') {
+        const today = weightUI.series[nn - 1].date;
+        const startDate = days === 'ytd' ? today.slice(0, 4) + '-01-01' : store.addDays(today, -parseInt(days, 10));
+        lo = weightUI.series.findIndex((e) => e.date >= startDate); if (lo < 0) lo = 0;
+      }
+      weightUI.lo = lo; weightUI.hi = nn - 1; weightUI.preset = days === '365' ? '1y' : days;
+      const l = $('#wf-lo'), h = $('#wf-hi'); if (l) l.value = lo; if (h) h.value = nn - 1;
+      document.querySelectorAll('[data-action=wfRange]').forEach((b) => b.classList.toggle('on', b.dataset.days === days));
+      weightRedraw();
+      break;
+    }
     case 'addWin': { const text = $('#winText').value.trim(); if (text) store.addWin({ text, goalId: $('#winGoal').value || null }); break; }
     case 'delWin': store.deleteWin(id); break;
     case 'brainAdd': {

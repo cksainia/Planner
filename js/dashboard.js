@@ -80,3 +80,28 @@ function shift(dateStr, n) {
 export function dashboard(state) {
   return (state.goals || []).map((g) => ({ goal: g, progress: goalProgress(state, g) }));
 }
+
+// ---------- weight analytics (Withings-fed) ----------
+
+// The weigh-in log as a stable, oldest-first [{date, lbs}] series.
+export function weightSeries(state) {
+  return (state.weightLog || []).slice().filter((e) => e && e.date && typeof e.lbs === 'number')
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function dayGap(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
+
+// Analytics over a (pre-sorted) series, optionally restricted to [from, to] (inclusive
+// 'YYYY-MM-DD' bounds). Returns {} when the window has no readings.
+// change < 0 means weight went DOWN (loss). perWeek is the average lb/week over the span.
+export function weightStats(series, from = null, to = null) {
+  const win = series.filter((e) => (!from || e.date >= from) && (!to || e.date <= to));
+  if (!win.length) return { count: 0 };
+  const first = win[0], last = win[win.length - 1];
+  let min = win[0], max = win[0];
+  for (const e of win) { if (e.lbs < min.lbs) min = e; if (e.lbs > max.lbs) max = e; }
+  const change = Math.round((last.lbs - first.lbs) * 10) / 10;
+  const days = dayGap(first.date, last.date);
+  const perWeek = days > 0 ? Math.round((change / days) * 7 * 10) / 10 : 0;
+  return { count: win.length, first, last, min, max, change, days, perWeek };
+}

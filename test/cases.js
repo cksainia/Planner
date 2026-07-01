@@ -300,3 +300,29 @@
   deleteBook('bk1');
   ok(!getState().books.find(function (b) { return b.id === 'bk1'; }), 'deleteBook removes the book');
 })();
+
+// ---------------- WEIGHT ANALYTICS ----------------
+(function () {
+  var ws = emptyState();
+  ws.weightLog = [
+    { date: '2025-06-01', lbs: 205 }, { date: '2025-12-20', lbs: 200 },
+    { date: '2026-01-05', lbs: 199 }, { date: '2026-03-01', lbs: 190 }, { date: '2026-06-30', lbs: 184 },
+  ];
+  var series = weightSeries(ws);
+  ok(series.length === 5 && series[0].date === '2025-06-01', 'weightSeries sorts oldest-first');
+
+  var all = weightStats(series, null, null);
+  ok(all.change === -21 && all.min.lbs === 184 && all.max.lbs === 205, 'weightStats all-time change/min/max');
+
+  var ytd = weightStats(series, '2026-01-01', '2026-06-30');
+  ok(ytd.count === 3 && ytd.first.lbs === 199 && ytd.change === -15, 'weightStats YTD window (first in-window is the baseline)');
+
+  var lastYr = weightStats(series, '2025-01-01', '2025-12-31');
+  ok(lastYr.change === -5, 'weightStats last-year window');
+
+  // per-week rate: -15 lb over the YTD span
+  var span = Math.round((new Date('2026-06-30') - new Date('2026-01-05')) / 86400000);
+  ok(ytd.perWeek === Math.round((-15 / span) * 7 * 10) / 10, 'weightStats computes lb/week rate');
+
+  ok(weightStats(series, '2030-01-01', '2030-12-31').count === 0, 'weightStats returns count 0 for an empty window');
+})();
