@@ -1,0 +1,29 @@
+name: Withings weight sync
+
+# Pulls new Withings weigh-ins into the planner's Firestore weightLog.
+# Triggers: every 6 hours, or manually. NOT on pull_request, so fork PRs can
+# never access the secrets below.
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: integrations/withings
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Sync
+        working-directory: integrations/withings
+        run: node sync.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
+          WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
+          PLANNER_UID: ${{ secrets.PLANNER_UID }}

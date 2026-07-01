@@ -2,3 +2,8 @@
 seed.local.json
 *.local.json
 .DS_Store
+
+# Firebase service-account key (used locally by the Withings authorize step)
+service-account.json
+**/service-account.json
+node_modules/

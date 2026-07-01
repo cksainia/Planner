@@ -1,0 +1,10 @@
+{
+  "name": "withings-planner-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pulls Withings weigh-ins into the planner's Firestore weightLog.",
+  "dependencies": {
+    "firebase-admin": "^12.5.0"
+  }
+}
