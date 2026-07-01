@@ -19,6 +19,9 @@ global.document = dom.window.document;
 global.localStorage = { getItem: (k) => (k in _ls ? _ls[k] : null), setItem: (k, v) => { _ls[k] = String(v); }, removeItem: (k) => { delete _ls[k]; } };
 global.HTMLElement = dom.window.HTMLElement;
 dom.window.LP_FIREBASE = { apiKey: 'REPLACE_ME' }; // -> local-only mode, no CDN
+// matchMedia stub so the app's responsive branch is testable; WIDE_MATCH flips it.
+let WIDE_MATCH = false;
+dom.window.matchMedia = (q) => ({ matches: WIDE_MATCH, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
 
 globalThis.RESULTS = [];
 const ok = (m, c) => RESULTS.push([!!c, m]);
@@ -133,6 +136,25 @@ try {
     RESULTS.push([!!bk, 'addBook creates a book']);
     document.querySelector('[data-action=cycleBook][data-id="'+bk.id+'"]').click();
     RESULTS.push([store.getState().books.find(function(b){return b.id===bk.id;}).status==='reading', 'cycleBook advances unread->reading']);
+
+    // 12) iPad / wide layout (fix: sidebar + master-detail). Flip the media query.
+    WIDE_MATCH = true;
+    ['today','tasks','goals','reflect','settings'].forEach(function(v){ view=v; render(); });
+    RESULTS.push([true, 'all views render in wide layout without throwing']);
+    view='today'; render();
+    RESULTS.push([!!document.querySelector('.frame .sidebar') && !!document.querySelector('.navbtn'), 'wide: sidebar nav renders (no bottom tab bar)']);
+    RESULTS.push([!document.querySelector('.tabbar'), 'wide: bottom tab bar is hidden']);
+    view='tasks'; tasksView='goal'; render();
+    RESULTS.push([!!document.querySelector('.tasks-md') && !!document.querySelector('.detail'), 'wide: Tasks renders master-detail with a detail panel']);
+    var selRow = document.querySelector('[data-action=selectTask]');
+    RESULTS.push([!!selRow, 'wide: task rows are selectable (not sheet-openers)']);
+    selRow.click();
+    RESULTS.push([!!document.querySelector('.detail .dtitle') && !!document.querySelector('[data-action=detImportant]'), 'wide: selecting a task fills the live-edit detail panel']);
+    var selId = selRow.getAttribute('data-id');
+    var impBefore = !!store.getState().tasks.find(function(t){return t.id===selId;}).important;
+    document.querySelector('[data-action=detImportant]').click();
+    RESULTS.push([!!store.getState().tasks.find(function(t){return t.id===selId;}).important !== impBefore, 'wide: detail Important toggle applies live']);
+    WIDE_MATCH = false;
   `);
 
   let pass = 0, fail = 0;

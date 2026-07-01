@@ -9,9 +9,61 @@ import { dashboard, goalProgress, goalTasks } from './dashboard.js';
 import * as ai from './ai.js';
 import { initFirebase, isConfigured, onAuth, signInWithGoogle, signOutUser, watchDoc, writeDoc } from './firebase.js';
 
-const CTX_EMOJI = { work: '💼', home: '🏠', outdoor: '🌳', digital: '💻', family: '👨‍👩‍👧', personal: '🧘' };
 const PRI_LABEL = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
-const BUCKET_LABEL = { inbox: '📥 Inbox', today: '📌 Today', tomorrow: '🌅 Tomorrow', later: '🗄️ Later', someday: '💭 Someday' };
+const BUCKET_LABEL = { inbox: 'Inbox', today: 'Today', tomorrow: 'Tomorrow', later: 'Later', someday: 'Someday' };
+const CONTEXT_LABEL = { work: 'Work', home: 'Home', outdoor: 'Outdoor', digital: 'Digital', family: 'Family', personal: 'Personal' };
+
+// --- inline-SVG icon system (replaces the old all-emoji icons; only 🐸 and 🔥
+// remain as signature emoji). Paths are minimal line/fill primitives. ---
+const ICONS = {
+  today:   { vb: '0 0 20 20', p: '<rect x="3" y="3" width="14" height="14" rx="3.5"/><path d="M6.5 10l2 2 4-4.5"/>' },
+  tasks:   { vb: '0 0 20 20', p: '<line x1="7" y1="5" x2="16" y2="5"/><line x1="7" y1="10" x2="16" y2="10"/><line x1="7" y1="15" x2="16" y2="15"/><circle cx="3.4" cy="5" r="1.1" fill="currentColor" stroke="none"/><circle cx="3.4" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="3.4" cy="15" r="1.1" fill="currentColor" stroke="none"/>' },
+  goals:   { vb: '0 0 20 20', p: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3.6"/><circle cx="10" cy="10" r="0.8" fill="currentColor" stroke="none"/>' },
+  reflect: { vb: '0 0 20 20', p: '<path d="M14.5 10.8A6.5 6.5 0 1 1 9.2 3.5a5.2 5.2 0 0 0 5.3 7.3z"/>', f: true },
+  setup:   { vb: '0 0 20 20', p: '<line x1="5" y1="4" x2="5" y2="16"/><circle cx="5" cy="7" r="2" fill="currentColor" stroke="none"/><line x1="10" y1="4" x2="10" y2="16"/><circle cx="10" cy="13" r="2" fill="currentColor" stroke="none"/><line x1="15" y1="4" x2="15" y2="16"/><circle cx="15" cy="9.5" r="2" fill="currentColor" stroke="none"/>' },
+  brand:   { vb: '0 0 18 18', p: '<circle cx="9" cy="9" r="6.5"/><circle cx="9" cy="9" r="2"/>' },
+  work:    { vb: '0 0 18 18', p: '<rect x="2" y="6" width="14" height="9" rx="1.5"/><path d="M6.5 6V4.5a1.5 1.5 0 0 1 1.5-1.5h2a1.5 1.5 0 0 1 1.5 1.5V6"/><line x1="2" y1="10" x2="16" y2="10"/>' },
+  home:    { vb: '0 0 18 18', p: '<path d="M3 8.5 9 3l6 5.5"/><path d="M4.5 8v6.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V8"/>' },
+  outdoor: { vb: '0 0 18 18', p: '<circle cx="9" cy="7" r="4"/><line x1="9" y1="11" x2="9" y2="15.5"/>' },
+  digital: { vb: '0 0 18 18', p: '<rect x="2.5" y="3.5" width="13" height="9" rx="1.2"/><line x1="6" y1="15.5" x2="12" y2="15.5"/><line x1="9" y1="12.5" x2="9" y2="15.5"/>' },
+  family:  { vb: '0 0 18 18', p: '<circle cx="6.5" cy="7" r="2.3"/><circle cx="12" cy="8" r="2"/><path d="M2.3 15c.5-3 2.3-4.6 4.2-4.6s3.7 1.6 4.2 4.6"/><path d="M11 15c.3-2.2 1.6-3.4 3-3.4"/>' },
+  personal:{ vb: '0 0 18 18', p: '<circle cx="9" cy="6" r="2.6"/><path d="M3.5 15c.7-3.6 2.9-5.6 5.5-5.6s4.8 2 5.5 5.6"/>' },
+  clock:   { vb: '0 0 18 18', p: '<circle cx="9" cy="9" r="6.5"/><path d="M9 5.5V9l3 1.8"/>' },
+  dueHard: { vb: '0 0 18 18', p: '<circle cx="9" cy="9" r="7"/><line x1="9" y1="5.5" x2="9" y2="9.5"/><circle cx="9" cy="12.3" r="0.9" fill="currentColor" stroke="none"/>' },
+  dueSoft: { vb: '0 0 18 18', p: '<rect x="2.5" y="3.5" width="13" height="12" rx="1.8"/><line x1="2.5" y1="7.2" x2="15.5" y2="7.2"/>' },
+  bolt:    { vb: '0 0 18 18', p: '<path d="M9.5 1.5 4 10.5h4l-1 6.5 6.5-9.5h-4.2l.7-6z"/>', f: true },
+  star:    { vb: '0 0 20 20', p: '<path d="M10 1.5l2.35 5.1 5.55.62-4.15 3.83 1.13 5.45L10 13.7l-4.88 2.8 1.13-5.45L2.1 7.22l5.55-.62z"/>', f: true },
+  urgent:  { vb: '0 0 18 18', p: '<circle cx="9" cy="9.5" r="6.5"/><path d="M9 6v3.5l2.5 1.5"/><line x1="6.5" y1="1.8" x2="4.5" y2="3.4"/><line x1="11.5" y1="1.8" x2="13.5" y2="3.4"/>' },
+  clockMini:{ vb: '0 0 18 18', p: '<circle cx="9" cy="9.5" r="6.5"/><path d="M9 6v3.5l2.5 1.5"/>' },
+  recur:   { vb: '0 0 18 18', p: '<path d="M4 9a5 5 0 0 1 8.5-3.5"/><path d="M14 9a5 5 0 0 1-8.5 3.5"/><path d="M12 3.3v2.4h-2.4"/><path d="M6 14.7v-2.4h2.4"/>' },
+  arrow:   { vb: '0 0 18 18', p: '<path d="M3 9h11"/><path d="M10 5l4 4-4 4"/>' },
+  play:    { vb: '0 0 18 18', p: '<path d="M4.5 2.8v12.4l11-6.2z"/>', f: true },
+  pencil:  { vb: '0 0 18 18', p: '<path d="M11.5 2.5l4 4L6 16l-4.5 1L2.5 12.5z"/>' },
+  ring:    { vb: '0 0 18 18', p: '<circle cx="9" cy="9" r="5.5"/>' },
+  bookReading: { vb: '0 0 18 18', p: '<path d="M9 4.5c-1.3-1-3-1.4-5-1v10c2 -.4 3.7 0 5 1 1.3-1 3-1.4 5-1v-10c-2-.4-3.7 0-5 1z"/><line x1="9" y1="4.5" x2="9" y2="14.5"/>' },
+  bookUnread:  { vb: '0 0 18 18', p: '<rect x="3" y="2.5" width="12" height="13" rx="1.5"/>' },
+};
+function icon(name, size = 14) {
+  const d = ICONS[name]; if (!d) return '';
+  const a = d.f ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg class="ic" width="${size}" height="${size}" viewBox="${d.vb}" ${a}>${d.p}</svg>`;
+}
+// The circular "checked" mark used by task/frog checkboxes.
+function checkMark(size = 24) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="var(--good)"/><path d="M7.5 12.3l2.8 2.8 6-6.2" stroke="var(--bg)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+// The finished-book icon (filled green disc + dark check).
+function bookFinishedIcon() {
+  return `<svg class="ic" width="17" height="17" viewBox="0 0 20 20"><circle cx="10" cy="10" r="10" fill="var(--good)"/><path d="M6 10.3l2.6 2.6 5.4-5.6" stroke="var(--bg)" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+// One stable hue per goal (assigned by creation order; cycles a 5-hue palette).
+const GOAL_HUES = ['oklch(72% 0.15 264)', 'oklch(72% 0.15 190)', 'oklch(72% 0.15 150)', 'oklch(72% 0.15 55)', 'oklch(72% 0.15 320)'];
+function goalColor(st, goalId) {
+  if (!goalId) return 'transparent';
+  const i = (st.goals || []).findIndex((g) => g.id === goalId);
+  return i >= 0 ? GOAL_HUES[i % GOAL_HUES.length] : 'transparent';
+}
 
 let view = 'today';
 let tasksView = 'goal'; // goal | inbox | buckets | matrix
@@ -21,6 +73,10 @@ let booted = false;
 let editing = null; // task-editor working state
 let pomo = null;    // pomodoro session
 let syncStatus = 'ok'; // 'ok' | 'error' — surfaced in the header when a cloud write fails
+let selectedTaskId = null; // iPad master-detail selection (not persisted)
+const WIDE_MQ = '(min-width: 960px)';
+function isWide() { return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(WIDE_MQ).matches; }
+const NAV = [['today', 'Today'], ['tasks', 'Tasks'], ['goals', 'Goals'], ['reflect', 'Reflect'], ['setup', 'Setup']];
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = () => $('#app');
@@ -37,6 +93,11 @@ function boot() {
   $('#overlay').addEventListener('click', onClick);
   const cfgOk = initFirebase();
   store.subscribe(() => { if (booted) render(); });
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const mql = window.matchMedia(WIDE_MQ);
+    const onMq = () => { if (booted) render(); };
+    if (mql.addEventListener) mql.addEventListener('change', onMq); else if (mql.addListener) mql.addListener(onMq);
+  }
 
   if (cfgOk) {
     onAuth((u) => {
@@ -109,14 +170,15 @@ function renderInner() {
   const caret = (focusId && 'selectionStart' in active) ? active.selectionStart : null;
 
   const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, reflect: viewReflect, settings: viewSettings }[view] || viewToday;
-  app().innerHTML = `
+  if (isWide()) app().innerHTML = wideShell(body);
+  else app().innerHTML = `
     <header class="topbar">
-      <div class="brand">🎯 Life Planner</div>
+      <div class="brand"><span class="brandmark">${icon('brand', 13)}</span>Life Planner</div>
       <div class="sub">${esc(humanDate(store.todayStr()))} · ${streakLabel(S())}${syncBadge()}</div>
     </header>
     <main class="screen">${body()}</main>
     <nav class="tabbar">
-      ${tab('today', '📋', 'Today')}${tab('tasks', '🗂️', 'Tasks')}${tab('goals', '🎯', 'Goals')}${tab('reflect', '🌙', 'Reflect')}${tab('settings', '⚙️', 'Setup')}
+      ${NAV.map(([id, label]) => tab(id === 'setup' ? 'settings' : id, id, label)).join('')}
     </nav>`;
   wire();
   lastView = view;
@@ -139,15 +201,39 @@ function syncBadge() {
   if (syncStatus === 'error') return ' · <span class="syncerr" title="Last cloud write failed — changes are saved on this device and will retry.">⚠️ sync failed</span>';
   return '';
 }
-function tab(id, icon, label) {
-  return `<button class="tabbtn ${view === id ? 'active' : ''}" data-nav="${id}"><span>${icon}</span>${label}</button>`;
+function tab(viewId, iconName, label) {
+  return `<button class="tabbtn ${view === viewId ? 'active' : ''}" data-nav="${viewId}"><span class="tabic">${icon(iconName, 17)}</span>${label}</button>`;
+}
+// iPad frame: persistent sidebar + titled main pane (replaces the bottom tab bar).
+function wideShell(body) {
+  const st = S();
+  const title = { today: 'Today', tasks: 'Tasks', goals: 'Goals', reflect: 'Reflect', settings: 'Setup' }[view] || 'Today';
+  const nav = NAV.map(([id, label]) => {
+    const vid = id === 'setup' ? 'settings' : id;
+    return `<button class="navbtn ${view === vid ? 'on' : ''}" data-nav="${vid}">${icon(id, 18)}<span>${label}</span></button>`;
+  }).join('');
+  return `<div class="frame">
+    <aside class="sidebar">
+      <div class="sbrand"><span class="brandmark">${icon('brand', 13)}</span><strong>Life Planner</strong></div>
+      <div class="sbdate">${esc(humanDate(store.todayStr()))}</div>
+      <div class="sbstreak">🔥 ${computeStreak(st)}-day streak</div>
+      <div class="sbdiv"></div>
+      ${nav}
+      <div style="flex:1"></div>
+      <div class="sbfoot">${isConfigured() && user ? (syncStatus === 'error' ? '⚠️ sync failed' : 'Signed in · synced ✓') : 'Local-only mode'}</div>
+    </aside>
+    <div class="mainpane">
+      <div class="paneHead"><strong>${esc(title)}</strong></div>
+      <div class="paneBody">${body()}</div>
+    </div>
+  </div>`;
 }
 
 // ---------- sign in ----------
 function renderSignIn() {
   app().innerHTML = `
     <div class="signin">
-      <h1>🎯 Life Planner</h1>
+      <h1><span class="brandmark" style="width:30px;height:30px;vertical-align:middle;margin-right:8px">${icon('brand', 17)}</span>Life Planner</h1>
       <p class="muted">Private. Synced across your devices.</p>
       <div class="card">
         <button class="primary gbtn" id="googleBtn"><span class="glogo">G</span> Continue with Google</button>
@@ -163,10 +249,13 @@ function renderSignIn() {
 // ---------- quick-add bar ----------
 function quickBar() {
   return `<div class="quickbar">
-    <input id="quickIn" aria-label="Quick add a task" placeholder="Quick add… e.g. Draft Q3 deck ! ~ 2h #Q3 tomorrow">
-    <button class="ghost" data-action="quickAdd" aria-label="Add task">＋</button>
+    <input id="quickIn" aria-label="Quick add a task" placeholder="Quick add… Draft deck ! ~45m #MVP">
+    <button class="addbtn" data-action="quickAdd" aria-label="Add task">+</button>
   </div>
-  <div class="quickhint muted small">! important · * urgent · ~ deep · #project · @work · 30m/2h · today/tomorrow/later</div>`;
+  <div class="quickhint">! important · * urgent · ~ deep · #project · @context · 30m/2h</div>`;
+}
+function budgetChips(budget) {
+  return [60, 90, 120, 150, 180, 240].map((m) => `<button class="bchip ${m === budget ? 'on' : ''}" data-action="setBudget" data-m="${m}">${m}m</button>`).join('');
 }
 
 // ---------- TODAY ----------
@@ -186,40 +275,44 @@ function viewToday() {
   const r = buildDailyList(st, { budgetMins: budget, pinnedIds: plan.mustDoIds || [], frogId });
   const deepDone = st.pomos.filter((p) => p.date === today).reduce((a, p) => a + (p.mins || 0), 0);
   const deepTarget = st.settings.deepTargetMins || 120;
+  const deepPct = Math.min(100, Math.round(deepDone / deepTarget * 100));
 
   const frogHtml = frog ? `<div class="frog ${frog.status === 'done' ? 'done' : ''}">
-      <button class="chk" data-action="toggle" data-id="${frog.id}" aria-label="${frog.status === 'done' ? 'Mark frog not done' : 'Mark frog done'}">${frog.status === 'done' ? '✅' : '⬜'}</button>
-      <div class="fbody"><div class="flabel">🐸 Eat the frog — your one big win today</div>
+      <button class="chk big ${frog.status === 'done' ? 'done' : ''}" data-action="toggle" data-id="${frog.id}" aria-label="${frog.status === 'done' ? 'Mark frog not done' : 'Mark frog done'}">${frog.status === 'done' ? checkMark(30) : ''}</button>
+      <div class="fbody"><div class="flabel">🐸 Eat the frog — today's one big win</div>
         <div class="ftitle">${esc(frog.title)}</div></div>
-      <div class="frogbtns"><button class="ghost small" data-action="focus" data-id="${frog.id}">▶ Focus</button>
-        <button class="ghost small" data-action="pickFrog" aria-label="Swap the frog">swap</button></div>
+      <div class="frogbtns"><button class="focuspill" data-action="focus" data-id="${frog.id}">${icon('play', 11)}Focus</button>
+        <button class="swaplink" data-action="pickFrog" aria-label="Swap the frog">Swap</button></div>
     </div>` : '';
 
   const mustDoHtml = r.mustDo.filter((i) => i.task.id !== frogId).map((i) => taskRow(i.task, { showEffort: true, focus: true })).join('')
-    || `<p class="muted">Nothing else queued — capture a task above.</p>`;
+    || `<p class="muted small">Nothing else queued — capture a task above.</p>`;
   const sugHtml = r.suggestions.map((i) => taskRow(i.task, { compact: true, focus: true })).join('');
 
-  return `${quickBar()}
-    <section class="card hero">
+  const hero = `<section class="card hero">
       <div class="row between">
-        <div><strong>Today's focus</strong><div class="muted small">Top ${r.mustDo.length} · ~${r.plannedMins} of ${budget} min</div></div>
-        <label class="budget">Budget
-          <select id="budgetSel" data-action="setBudget" aria-label="Daily focus budget">${[30, 60, 90, 120, 180, 240, 360].map((m) => `<option value="${m}" ${m === budget ? 'selected' : ''}>${m}m</option>`).join('')}</select>
-        </label>
+        <div><div class="focustitle">Today's focus</div><div class="focussub">Top ${r.mustDo.length} · ~${r.plannedMins} of ${budget} min</div></div>
+        <div class="budgetchips">${budgetChips(budget)}</div>
       </div>
-      <div class="deepbar"><div class="row between small"><span>🧠 Deep work today</span><span>${deepDone} / ${deepTarget} min</span></div>
-        <div class="bar"><span style="width:${Math.min(100, Math.round(deepDone / deepTarget * 100))}%"></span></div></div>
-      ${r.flagged.length ? `<div class="nudge">⚡ ${r.flagged.length} big task${r.flagged.length > 1 ? 's' : ''} need a next action — break ${r.flagged.length > 1 ? 'them' : 'it'} down.</div>` : ''}
-    </section>
-    ${frogHtml}
-    <h3 class="sech">Must-do</h3>
-    <div class="list">${mustDoHtml}</div>
-    ${sugHtml ? `<h3 class="sech">If you have more time</h3><div class="list">${sugHtml}</div>` : ''}
-    <p class="tip">💡 Tempted to scroll? Hit ▶ Focus on the frog and start a 25-minute timer.</p>`;
+      <div class="deepbar"><div class="deeprow"><span>${icon('bolt', 11)} Deep work</span><span>${deepDone} / ${deepTarget} min</span></div>
+        <div class="bar"><span style="width:${deepPct}%"></span></div></div>
+      ${r.flagged.length ? `<div class="nudge">${icon('bolt', 13)} ${r.flagged.length} big task${r.flagged.length > 1 ? 's' : ''} need a next action — break ${r.flagged.length > 1 ? 'them' : 'it'} down.</div>` : ''}
+    </section>`;
+  const mustDo = `<div class="sech">Must-do</div><div class="list">${mustDoHtml}</div>`;
+  const sug = sugHtml ? `<div class="sech">If you have more time</div><div class="list">${sugHtml}</div>` : '';
+  const tip = `<p class="tip">Tempted to scroll? Hit ▶ Focus on the frog and start a 25-minute timer.</p>`;
+
+  if (isWide()) {
+    return `<div class="today-grid">
+      <div>${quickBar()}${hero}${frogHtml}${mustDo}</div>
+      <div>${sug}${rollupBlock()}</div>
+    </div>${tip}`;
+  }
+  return `${quickBar()}${hero}${frogHtml}${mustDo}${sug}${tip}`;
 }
 
 function emptyStateCard() {
-  return `<section class="card"><h2>Welcome 👋</h2>
+  return `<section class="card"><h2>Welcome</h2>
     <p>This device has no data yet. Import your seed once to load your goals and tasks — it stays private.</p>
     <p><button class="primary" data-nav="settings">Go to Setup → Import</button></p></section>`;
 }
@@ -228,95 +321,132 @@ function emptyStateCard() {
 function viewTasks() {
   const st = S();
   if (store.needsSeed()) return emptyStateCard();
+  const wide = isWide();
+  const segMeta = { goal: 'By goal', inbox: 'Inbox', buckets: 'Buckets', matrix: 'Matrix' };
   const seg = ['goal', 'inbox', 'buckets', 'matrix'].map((v) =>
-    `<button class="segbtn ${tasksView === v ? 'on' : ''}" data-action="tasksView" data-v="${v}">${{ goal: 'By goal', inbox: 'Inbox', buckets: 'Buckets', matrix: 'Matrix' }[v]}</button>`).join('');
+    `<button class="segbtn ${tasksView === v ? 'on' : ''}" data-action="tasksView" data-v="${v}">${segMeta[v]}</button>`).join('');
+  const openAction = wide ? 'selectTask' : 'edit';
   let body = '';
-  if (tasksView === 'goal') body = tasksByGoal(st);
+  if (tasksView === 'goal') body = tasksByGoal(st, openAction);
   else if (tasksView === 'inbox') body = tasksInbox(st);
-  else if (tasksView === 'buckets') body = tasksBuckets(st);
+  else if (tasksView === 'buckets') body = tasksBuckets(st, openAction);
   else if (tasksView === 'matrix') body = tasksMatrix(st);
-  return `${quickBar()}
-    <div class="row between"><div class="seg">${seg}</div><button class="ghost" data-action="newTask">+ Task</button></div>
-    ${body}`;
+  const left = `<div class="row between" style="margin-bottom:14px"><div class="seg">${seg}</div><button class="ghost" data-action="newTask">+ Task</button></div>${body}`;
+  if (wide) return `<div class="tasks-md"><div>${left}</div><div>${detailPanel()}</div></div>`;
+  return `${quickBar()}${left}`;
 }
 
-function tasksByGoal(st) {
+function tasksByGoal(st, openAction) {
   let html = '';
   for (const g of st.goals) {
     const ts = goalTasks(st, g.id);
     if (!ts.length) continue;
     const done = ts.filter((t) => t.status === 'done').length;
-    html += goalGroup(esc(g.title) + ` <span class="muted small">${done}/${ts.length}</span>`, ts);
+    html += taskGroup(goalColor(st, g.id), esc(g.title.split(':')[0]), `${done}/${ts.length}`, ts, openAction);
   }
   const standalone = st.tasks.filter((t) => !(t.goalIds || []).length);
-  if (standalone.length) html += goalGroup('Standalone', standalone);
-  return html;
+  if (standalone.length) html += taskGroup('var(--muted3)', 'Standalone', '', standalone, openAction);
+  return html || '<p class="muted small">No tasks yet.</p>';
 }
-function goalGroup(title, tasks) {
+function taskGroup(color, title, count, tasks, openAction) {
   const order = { p1: 0, p2: 1, p3: 2, p4: 3 };
   const sorted = tasks.slice().sort((a, b) => (a.status === 'done') - (b.status === 'done') || (order[a.priority] - order[b.priority]));
-  return `<details class="grp" open><summary>${title}</summary><div class="list">${sorted.map((t) => taskRow(t, {})).join('')}</div></details>`;
+  return `<div class="grp"><div class="grphead">${color ? `<span class="gdot" style="background:${color}"></span>` : ''}<strong>${title}</strong>${count ? `<span class="muted small">${count}</span>` : ''}</div>
+    <div class="list">${sorted.map((t) => taskRow(t, { openAction, selected: t.id === selectedTaskId })).join('')}</div></div>`;
 }
 
 function tasksInbox(st) {
   const inbox = st.tasks.filter((t) => t.bucket === 'inbox' && t.status !== 'done');
-  if (!inbox.length) return `<p class="muted" style="text-align:center;margin:24px">📥 Inbox zero — nicely done. ✨</p>`;
+  if (!inbox.length) return `<p class="muted" style="text-align:center;margin:28px 8px">Inbox zero — nicely done.</p>`;
   return `<p class="muted small">Triage: send each to a day, or open to tag a goal.</p><div class="list">${inbox.map((t) => `
     <div class="task" data-id="${t.id}">
-      <button class="chk" data-action="toggle" data-id="${t.id}" aria-label="Mark done">⬜</button>
+      <button class="chk" data-action="toggle" data-id="${t.id}" aria-label="Mark done"></button>
       <div class="tbody" data-action="edit" data-id="${t.id}"><div class="ttitle">${esc(t.title)}</div></div>
       <div class="triage">
-        <button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button>
+        <button class="btn xs solid" data-action="bucket" data-id="${t.id}" data-b="today">Today</button>
         <button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="tomorrow">Tmrw</button>
-        <button class="btn xs ghost" data-action="bucket" data-id="${t.id}" data-b="later">Later</button>
       </div></div>`).join('')}</div>`;
 }
 
-function tasksBuckets(st) {
+function tasksBuckets(st, openAction) {
   return ['today', 'tomorrow', 'later', 'someday', 'inbox'].map((b) => {
     const ts = st.tasks.filter((t) => t.bucket === b && t.status !== 'done');
     if (!ts.length) return '';
-    return `<details class="grp" ${b === 'today' || b === 'tomorrow' ? 'open' : ''}><summary>${BUCKET_LABEL[b]} <span class="muted small">${ts.length}</span></summary><div class="list">${ts.map((t) => taskRow(t, {})).join('')}</div></details>`;
-  }).join('') || `<p class="muted">No open tasks.</p>`;
+    return taskGroup(null, BUCKET_LABEL[b], String(ts.length), ts, openAction);
+  }).join('') || `<p class="muted small">No open tasks.</p>`;
 }
 
 function tasksMatrix(st) {
   const open = st.tasks.filter((t) => t.status !== 'done');
+  const colors = { qdo: 'var(--danger)', qsched: 'var(--accent)', qdel: 'var(--warn)', qdrop: 'var(--muted)' };
   const quads = [
-    { k: 'do', label: '🔴 Do First', f: (t) => t.important && t.urgent },
-    { k: 'schedule', label: '🔵 Schedule', f: (t) => t.important && !t.urgent },
-    { k: 'delegate', label: '🟡 Delegate', f: (t) => !t.important && t.urgent },
-    { k: 'drop', label: '⚪ Later / Drop', f: (t) => !t.important && !t.urgent },
+    { k: 'qdo', label: 'Do first', f: (t) => t.important && t.urgent },
+    { k: 'qsched', label: 'Schedule', f: (t) => t.important && !t.urgent },
+    { k: 'qdel', label: 'Delegate', f: (t) => !t.important && t.urgent },
+    { k: 'qdrop', label: 'Later / drop', f: (t) => !t.important && !t.urgent },
   ];
-  return `<p class="muted small">Tap a task to set ⭐ Important / ⏰ Urgent.</p><div class="matrix">${quads.map((q) => {
+  const open2 = isWide() ? 'selectTask' : 'edit';
+  return `<p class="muted small">Tap a task to set Important / Urgent.</p><div class="matrix">${quads.map((q) => {
     const ts = open.filter(q.f);
-    return `<div class="quad"><div class="qhead">${q.label} <span class="muted small">${ts.length}</span></div>${ts.map((t) =>
-      `<div class="qtask" data-action="edit" data-id="${t.id}">${t.id === store.getFrogId() ? '🐸 ' : ''}${esc(t.title)}</div>`).join('') || '<div class="muted small">—</div>'}</div>`;
+    return `<div class="quad"><div class="qhead ${q.k}"><span class="qc" style="background:${colors[q.k]}"></span>${q.label} <span class="qn">${ts.length}</span></div>${ts.map((t) =>
+      `<div class="qtask" data-action="${open2}" data-id="${t.id}">${t.id === store.getFrogId() ? '🐸 ' : ''}${esc(t.title)}</div>`).join('') || '<div class="muted small">—</div>'}</div>`;
   }).join('')}</div>`;
 }
 
-function taskRow(t, { showEffort = false, compact = false, focus = false } = {}) {
+// iPad master-detail: live-editing panel for the selected task (no Save button).
+function detailPanel() {
   const st = S();
+  const t = selectedTaskId ? st.tasks.find((x) => x.id === selectedTaskId) : null;
+  if (!t) return `<div class="detail"><div class="detail-empty">Select a task on the left to edit it here.</div></div>`;
   const goal = st.goals.find((g) => (t.goalIds || []).includes(g.id));
+  const dueTxt = t.deadline ? 'Deadline ' + t.deadline : (t.dueDate ? 'Due ' + t.dueDate : 'No date');
+  const sub = [goal ? esc(goal.title.split(':')[0]) : 'No goal', (t.effortMins || 0) + 'm', dueTxt].join(' · ');
+  const ctxBtns = ['work', 'home', 'outdoor', 'digital', 'family', 'personal'].map((c) =>
+    `<button class="tg ${t.context === c ? 'on' : ''}" data-action="detCtx" data-id="${t.id}" data-c="${c}">${icon(c, 12)}${CONTEXT_LABEL[c]}</button>`).join('');
+  const bkBtns = ['inbox', 'today', 'tomorrow', 'later', 'someday'].map((b) =>
+    `<button class="tg ${t.bucket === b ? 'on' : ''}" data-action="detBucket" data-id="${t.id}" data-b="${b}">${BUCKET_LABEL[b]}</button>`).join('');
+  return `<div class="detail">
+    <div class="dtitle">${esc(t.title)}</div>
+    <div class="dsub">${sub}</div>
+    <label class="fld">Priority (Eisenhower)</label>
+    <div class="toggles"><button class="tg ${t.important ? 'on' : ''}" data-action="detImportant" data-id="${t.id}">${icon('star', 12)}Important</button><button class="tg ${t.urgent ? 'on' : ''}" data-action="detUrgent" data-id="${t.id}">${icon('clockMini', 12)}Urgent</button></div>
+    <label class="fld">Work type</label>
+    <div class="toggles"><button class="tg ${t.depth === 'deep' ? 'on good' : ''}" data-action="detDeep" data-id="${t.id}">${icon('bolt', 11)}Deep</button><button class="tg ${t.depth !== 'deep' ? 'on' : ''}" data-action="detShallow" data-id="${t.id}">${icon('ring', 11)}Shallow</button></div>
+    <label class="fld">Context</label>
+    <div class="toggles ctxgrid">${ctxBtns}</div>
+    <label class="fld">When</label>
+    <div class="toggles wrap">${bkBtns}</div>
+    <div class="btnrow"><button class="focuspill" style="flex:1;justify-content:center" data-action="focus" data-id="${t.id}">${icon('play', 11)}Focus</button><button class="danger" data-action="deleteTask" data-id="${t.id}">Delete</button></div>
+  </div>`;
+}
+
+function taskRow(t, { showEffort = false, compact = false, focus = false, openAction = 'edit', selected = false } = {}) {
+  const st = S();
+  const gid = (t.goalIds || [])[0];
+  const goal = st.goals.find((g) => g.id === gid);
+  const gc = goalColor(st, gid);
   const big = isBig(t, st.settings.bigTaskThreshold);
-  const due = t.deadline || t.dueDate;
-  const flags = `${t.important ? '<span class="chip flag">⭐</span>' : ''}${t.urgent ? '<span class="chip flag">⏰</span>' : ''}${t.depth === 'deep' ? '<span class="chip">🧠 deep</span>' : ''}${t.recur !== 'none' ? '<span class="chip">🔁</span>' : ''}`;
-  return `<div class="task ${t.status === 'done' ? 'done' : ''}" data-id="${t.id}">
-    <button class="chk" data-action="toggle" data-id="${t.id}" aria-label="toggle">${t.status === 'done' ? '✅' : '⬜'}</button>
-    <div class="tbody" data-action="edit" data-id="${t.id}">
+  const eff = showEffort ? todayEffort(t, st.settings.bigTaskThreshold) : t.effortMins;
+  const meta = [`<span class="pdot ${t.priority}" title="${PRI_LABEL[t.priority]}"></span>`];
+  if (t.context) meta.push(`<span class="mi ctx" title="${esc(t.context)}">${icon(t.context)}</span>`);
+  if (eff) meta.push(`<span class="mi">${icon('clock', 12)}${eff}m</span>`);
+  if (t.deadline) meta.push(`<span class="mi hard">${icon('dueHard', 12)}${esc(t.deadline)}</span>`);
+  else if (t.dueDate) meta.push(`<span class="mi">${icon('dueSoft', 12)}${esc(t.dueDate)}</span>`);
+  if (t.depth === 'deep') meta.push(`<span class="deepchip">${icon('bolt', 10)}deep</span>`);
+  if (t.important) meta.push(`<span class="flagi imp" title="Important">${icon('star', 12)}</span>`);
+  if (t.urgent) meta.push(`<span class="flagi urg" title="Urgent">${icon('urgent', 12)}</span>`);
+  if (t.recur && t.recur !== 'none') meta.push(`<span class="flagi rec" title="Repeats">${icon('recur', 12)}</span>`);
+  if (goal) meta.push(`<span class="goaltag" style="--goalc:${gc}">${esc(goal.title.split(':')[0].split('&')[0].trim())}</span>`);
+
+  return `<div class="task ${t.status === 'done' ? 'done' : ''} ${selected ? 'sel' : ''}" data-id="${t.id}" style="--goalc:${gc}">
+    <button class="chk ${t.status === 'done' ? 'done' : ''}" data-action="toggle" data-id="${t.id}" aria-label="${t.status === 'done' ? 'Mark not done' : 'Mark done'}">${t.status === 'done' ? checkMark(24) : ''}</button>
+    <div class="tbody" data-action="${openAction}" data-id="${t.id}">
       <div class="ttitle">${t.ref ? `<span class="ref">${esc(t.ref)}</span> ` : ''}${esc(t.title)}</div>
-      <div class="meta">
-        <span class="chip">${CTX_EMOJI[t.context] || ''} ${esc(t.context)}</span>
-        <span class="chip pri ${t.priority}">${PRI_LABEL[t.priority]}</span>
-        ${showEffort ? `<span class="chip">⏱ ${todayEffort(t, st.settings.bigTaskThreshold)}m</span>` : ''}
-        ${due ? `<span class="chip ${t.deadline ? 'hard' : ''}">${t.deadline ? '⛔' : '📅'} ${esc(due)}</span>` : ''}
-        ${flags}
-        ${goal ? `<span class="chip goal">${esc(goal.title.split(':')[0].split('&')[0].trim())}</span>` : ''}
-      </div>
-      ${t.nextAction ? `<div class="next">➡ ${esc(t.nextAction)}</div>` : ''}
-      ${big && !compact ? `<button class="ghost small" data-action="decompose" data-id="${t.id}">⚡ Break it down</button>` : ''}
+      <div class="meta">${meta.join('')}</div>
+      ${t.nextAction ? `<div class="next">${icon('arrow', 11)}${esc(t.nextAction)}</div>` : ''}
+      ${big && !compact ? `<button class="breakdown" data-action="decompose" data-id="${t.id}">${icon('bolt', 10)}Break it down</button>` : ''}
     </div>
-    ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer" aria-label="Start focus timer">▶</button>` : ''}
+    ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer" aria-label="Start focus timer">${icon('play', 12)}</button>` : ''}
   </div>`;
 }
 
@@ -324,33 +454,42 @@ function taskRow(t, { showEffort = false, compact = false, focus = false } = {})
 function viewGoals() {
   const st = S();
   if (store.needsSeed()) return emptyStateCard();
-  const cards = dashboard(st).map(({ goal, progress }) => `
-    <div class="card goalcard">
-      <div class="row between"><strong>${esc(goal.title)}</strong><span class="row" style="gap:8px;align-items:center"><span class="pct">${progress.pct}%</span><button class="iconBtn" data-action="editGoal" data-id="${goal.id}" aria-label="Edit goal">✎</button></span></div>
-      <div class="bar"><span style="width:${progress.pct}%"></span></div>
+  const wide = isWide();
+  const cards = dashboard(st).map(({ goal, progress }) => {
+    const c = goalColor(st, goal.id);
+    return `<div class="card goalcard">
+      <div class="row between">
+        <div class="goaltitle"><span class="gdot" style="background:${c}"></span><strong>${esc(goal.title)}</strong></div>
+        <div class="row" style="gap:8px;align-items:center"><span class="pct" style="color:${c}">${progress.pct}%</span><button class="editgoal" data-action="editGoal" data-id="${goal.id}" aria-label="Edit goal">${icon('pencil', 12)}</button></div>
+      </div>
+      <div class="gbar"><span style="width:${progress.pct}%;background:${c}"></span></div>
       <div class="muted small">${esc(progress.label)}${progress.detail ? ' · ' + esc(progress.detail) : ''}</div>
-      ${progress.spark && progress.spark.length ? sparkline(progress.spark) : ''}
-    </div>`).join('') || '<p class="muted small">No goals yet — add your first one.</p>';
-  return `${trackersBlock()}
-    <div class="row between"><h3 class="sech" style="margin:0">Goals</h3><button class="ghost" data-action="newGoal">+ Goal</button></div>
-    ${cards}${booksBlock(st)}${rollupBlock()}`;
+      ${progress.spark && progress.spark.length ? sparkline(progress.spark, c) : ''}
+    </div>`;
+  }).join('') || '<p class="muted small">No goals yet — add your first one.</p>';
+  const head = `<div class="row between" style="margin:2px 2px 10px"><h3 class="sech" style="margin:0">Goals</h3><button class="ghost" data-action="newGoal">+ Goal</button></div>`;
+  const cardsWrap = wide ? `<div class="goals-grid2">${cards}</div>` : cards;
+  const books = booksBlock(st);
+  const bottom = (wide && books) ? `<div class="two-col">${books}${rollupBlock()}</div>` : `${books}${rollupBlock()}`;
+  return `${trackersBlock()}${head}${cardsWrap}${bottom}`;
 }
 // Reading-list tracker — the only path to move a 'count' goal (spec: 12 books).
 function booksBlock(st) {
   if (!st.goals.some((g) => g.metric === 'count')) return '';
   const books = st.books || [];
-  const icon = { unread: '⬜', reading: '📖', finished: '✅' };
-  const rows = books.map((b) => `<div class="task">
-      <button class="chk" data-action="cycleBook" data-id="${b.id}" aria-label="Cycle reading status">${icon[b.status] || '⬜'}</button>
-      <div class="tbody"><div class="ttitle ${b.status === 'finished' ? 'done' : ''}">${esc(b.title)}${b.author ? ` <span class="muted small">— ${esc(b.author)}</span>` : ''}</div>
-        <div class="meta"><span class="chip">${esc(b.status)}</span></div></div>
+  const rows = books.map((b) => {
+    const ic = b.status === 'finished' ? bookFinishedIcon() : (b.status === 'reading' ? icon('bookReading', 17) : icon('bookUnread', 17));
+    return `<div class="book">
+      <button class="bookcyc ${b.status}" data-action="cycleBook" data-id="${b.id}" aria-label="Cycle reading status">${ic}</button>
+      <div class="booktitle ${b.status === 'finished' ? 'finished' : ''}">${esc(b.title)}${b.author ? ` <span class="bookauthor">— ${esc(b.author)}</span>` : ''}</div>
       <button class="x" data-action="delBook" data-id="${b.id}" aria-label="Delete book">×</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   const finished = books.filter((b) => b.status === 'finished').length;
-  return `<section class="card"><h3 class="sech tight">📚 Reading list <span class="muted small">${finished} finished</span></h3>
+  return `<section class="card"><h3 class="sech tight" style="display:flex;justify-content:space-between">Reading list <span class="muted small" style="text-transform:none;letter-spacing:0">${finished} finished</span></h3>
     <div class="list">${rows || '<p class="muted small">No books yet — add one below.</p>'}</div>
-    <div class="row"><input id="bookIn" aria-label="Book title" placeholder="Add a book title…"><button class="ghost" data-action="addBook" aria-label="Add book">＋ Add</button></div>
-    <p class="muted small">Tap the box to cycle unread → reading → finished.</p></section>`;
+    <div class="row" style="margin-top:10px"><input id="bookIn" aria-label="Book title" placeholder="Add a book title…"><button class="ghost" data-action="addBook" aria-label="Add book">+ Add</button></div>
+    <p class="muted small" style="margin-top:8px">Tap the box to cycle unread → reading → finished.</p></section>`;
 }
 function trackersBlock() {
   const st = S();
@@ -359,21 +498,21 @@ function trackersBlock() {
   const hd = st.habitsDaily[today] || {};
   const lastW = (st.weightLog[st.weightLog.length - 1] || {}).lbs;
   return `<section class="card"><h3 class="sech tight">Daily trackers</h3>
-    <div class="habits">${habits.map((h) => `<button class="habit ${hd[h.id] ? 'on' : ''}" data-action="habit" data-id="${h.id}">${hd[h.id] ? '✅' : '⬜'} ${esc(h.label)}</button>`).join('') || '<span class="muted">No habits configured.</span>'}</div>
-    <div class="row weight"><label>Weight today <input type="number" min="1" step="0.1" id="wIn" placeholder="${lastW != null ? lastW : 'lbs'}"></label><button class="ghost" data-action="logWeight" aria-label="Log today's weight">Log</button></div>
+    <div class="habits">${habits.map((h) => `<button class="habit ${hd[h.id] ? 'on' : ''}" data-action="habit" data-id="${h.id}">${esc(h.label)}</button>`).join('') || '<span class="muted small">No habits configured.</span>'}</div>
+    <div class="row weight"><label>Weight today (lbs) <input type="number" min="1" step="0.1" id="wIn" placeholder="${lastW != null ? lastW : 'lbs'}"></label><button class="ghost" data-action="logWeight" aria-label="Log today's weight">Log</button></div>
   </section>`;
 }
 function rollupBlock() {
   const r = rollup(S(), store.todayStr(), 7);
   const deep = S().pomos.filter((p) => p.date >= r.start && p.date <= r.end).reduce((a, p) => a + (p.mins || 0), 0);
   return `<section class="card"><h3 class="sech tight">Last 7 days</h3>
-    <div class="stats"><div><b>${r.completedCount}</b><span>tasks done</span></div><div><b>${r.winCount}</b><span>wins</span></div><div><b>${Math.round(deep / 60)}h</b><span>deep work</span></div></div></section>`;
+    <div class="stats"><div><b class="s-tasks">${r.completedCount}</b><span>tasks done</span></div><div><b class="s-wins">${r.winCount}</b><span>wins</span></div><div><b class="s-deep">${Math.round(deep / 60)}h</b><span>deep work</span></div></div></section>`;
 }
-function sparkline(vals) {
+function sparkline(vals, color = 'var(--good)') {
   if (vals.length < 2) return '';
-  const w = 220, h = 36, min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+  const w = 220, h = 34, min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - min) / span) * (h - 4) - 2}`).join(' ');
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" style="stroke:${color}"/></svg>`;
 }
 
 // ---------- REFLECT (nightly + weekly) ----------
@@ -393,31 +532,32 @@ function viewReflect() {
   const lastWk = st.lastWeeklyReview;
   const weekDue = !lastWk || store.addDays(lastWk, 7) <= today;
 
-  return `
-    <section class="card">
-      <h3 class="sech tight">Today's wins 🏆</h3>
-      <div class="muted small">${md.planned ? `Must-dos: ${md.done}/${md.planned} done.` : ''} 🔥 ${computeStreak(st)}-day streak</div>
+  const winsCard = `<section class="card">
+      <h3 class="sech tight">Today's wins</h3>
+      <div class="muted small">${md.planned ? `Must-dos: ${md.done}/${md.planned} done. ` : ''}🔥 ${computeStreak(st)}-day streak</div>
       <ul class="wins">${winsHtml}</ul>
       <div class="row"><input id="winText" placeholder="Log a win (planned or not)…"><select id="winGoal"><option value="">— goal —</option>${st.goals.map((g) => `<option value="${g.id}">${esc(g.title.split(':')[0])}</option>`).join('')}</select><button class="ghost" data-action="addWin">Add</button></div>
-      <button class="ghost small" data-action="summarize">✨ Summarize my day</button>
+      <button class="ghost small" data-action="summarize">Summarize my day</button>
       <p id="daySummary" class="summary"></p>
-    </section>
-    <section class="card">
-      <h3 class="sech tight">🧠 Brain-dump for tomorrow</h3>
+    </section>`;
+  const brainCard = `<section class="card">
+      <h3 class="sech tight">Brain-dump for tomorrow</h3>
       <div class="muted small">One task per line — they land in Tomorrow. You can use ! ~ #proj 30m too.</div>
       <textarea id="brainDump" class="brain" placeholder="Email Priya re: contract !\nGym ~ 45m @personal\nDraft Q3 deck ~ 2h #Q3"></textarea>
-      <button class="ghost" data-action="brainAdd">＋ Add to tomorrow</button>
-    </section>
-    <section class="card">
+      <button class="ghost" data-action="brainAdd">+ Add to tomorrow</button>
+    </section>`;
+  const frogCard = `<section class="card">
       <h3 class="sech tight">🐸 Tomorrow's frog</h3>
       <div class="muted small">Pick the one task that makes ${esc(humanDate(tomorrow))} a win.</div>
-      ${tomorrowTasks.length || cands.length ? `<select id="frogSel"><option value="">— auto-pick the most important —</option>${(tomorrowTasks.length ? tomorrowTasks : cands.map((c) => c.t)).map((t) => `<option value="${t.id}" ${store.getFrogId(tomorrow) === t.id ? 'selected' : ''}>${esc(t.title)}</option>`).join('')}</select><button class="good ghost" data-action="setTomorrowFrog">Set frog</button>` : '<div class="muted small">Nothing queued for tomorrow yet.</div>'}
-    </section>
-    <section class="card ${weekDue ? 'due' : ''}">
-      <h3 class="sech tight">📆 Weekly review ${weekDue ? '<span class="badge">due</span>' : ''}</h3>
+      ${tomorrowTasks.length || cands.length ? `<div class="row" style="margin-top:8px"><select id="frogSel" style="flex:1"><option value="">— auto-pick the most important —</option>${(tomorrowTasks.length ? tomorrowTasks : cands.map((c) => c.t)).map((t) => `<option value="${t.id}" ${store.getFrogId(tomorrow) === t.id ? 'selected' : ''}>${esc(t.title)}</option>`).join('')}</select><button class="ghost" data-action="setTomorrowFrog">Set frog</button></div>` : '<div class="muted small">Nothing queued for tomorrow yet.</div>'}
+    </section>`;
+  const weeklyCard = `<section class="card ${weekDue ? 'due' : ''}">
+      <h3 class="sech tight">Weekly review ${weekDue ? '<span class="badge">due</span>' : ''}</h3>
       <div class="muted small">${weekDue ? 'Clear stale tasks and reset priorities.' : 'Done recently — ' + esc(prettyDate(lastWk)) + '.'}</div>
       ${weekDue ? weeklyReviewBody(st) : ''}
     </section>`;
+  if (isWide()) return `<div class="two-col"><div>${winsCard}${brainCard}</div><div>${frogCard}${weeklyCard}</div></div>`;
+  return `${winsCard}${brainCard}${frogCard}${weeklyCard}`;
 }
 function weeklyReviewBody(st) {
   const today = store.todayStr();
@@ -427,7 +567,7 @@ function weeklyReviewBody(st) {
   const list = stale.slice(0, 12).map((t) => `<div class="task"><div class="tbody"><div class="ttitle">${esc(t.title)}</div></div>
     <div class="triage"><button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button><button class="btn xs ghost" data-action="bucket" data-id="${t.id}" data-b="someday">Someday</button></div></div>`).join('');
   return `<div class="muted small" style="margin:8px 0">${stale.length} stale / overdue task${stale.length === 1 ? '' : 's'} to triage:</div>
-    <div class="list">${list || '<span class="muted small">Nothing stale — great shape. ✨</span>'}</div>
+    <div class="list">${list || '<span class="muted small">Nothing stale — great shape.</span>'}</div>
     <button class="primary" style="margin-top:12px" data-action="finishWeekly">Finish weekly review</button>`;
 }
 
@@ -437,33 +577,34 @@ function viewSettings() {
   const st = S();
   const synced = isConfigured();
   const s = st.settings;
-  return `
-    <section class="card"><h3 class="sech tight">Sync</h3>
-      ${synced ? `<div class="muted small">Signed in as <b>${esc(user ? user.email : '')}</b> · ${syncStatus === 'error' ? '<span class="syncerr">⚠️ last cloud write failed</span> — saved locally, will retry.' : 'cloud sync on ✓'}</div><button class="ghost" data-action="signout">Sign out</button>` : `<div class="muted small">Local-only mode. Use Export to back up.</div>`}
-    </section>
-    <section class="card"><h3 class="sech tight">Data</h3>
-      <p class="muted small">Your goals & tasks are private — bootstrapped from a seed file, never in code.</p>
-      <div class="row wrap"><label class="filebtn">📥 Import seed / backup<input type="file" accept="application/json,.json" id="importFile" hidden></label><button class="ghost" data-action="export">📤 Export JSON</button></div>
+  const sync = `<section class="card"><h3 class="sech tight">Sync</h3>
+      ${synced ? `<div class="muted small">Signed in as <b>${esc(user ? user.email : '')}</b> · ${syncStatus === 'error' ? '<span class="syncerr">⚠️ last cloud write failed</span> — saved locally, will retry.' : 'cloud sync on ✓'}</div><button class="ghost" data-action="signout" style="margin-top:10px">Sign out</button>` : `<div class="muted small">Local-only mode. Use Export to back up.</div>`}
+    </section>`;
+  const data = `<section class="card"><h3 class="sech tight">Data</h3>
+      <p class="muted small">Your goals &amp; tasks are private — bootstrapped from a seed file, never in code.</p>
+      <div class="row wrap"><label class="filebtn">Import seed / backup<input type="file" accept="application/json,.json" id="importFile" hidden></label><button class="ghost" data-action="export">Export JSON</button></div>
       <p id="ioMsg" class="muted small"></p>
-    </section>
-    <section class="card"><h3 class="sech tight">Daily engine & deep work</h3>
+    </section>`;
+  const engine = `<section class="card"><h3 class="sech tight">Daily engine &amp; deep work</h3>
       <label>Default focus budget (min)<input type="number" min="15" step="15" id="budgetCfg" value="${s.dailyBudgetMins}"></label>
       <label>"Big task" threshold (min)<input type="number" min="5" step="5" id="bigCfg" value="${s.bigTaskThreshold}"></label>
       <label>Daily deep-work target (min)<input type="number" min="15" step="15" id="deepCfg" value="${s.deepTargetMins}"></label>
       <div class="row"><label style="flex:1">Day starts<input type="time" id="wsCfg" value="${s.workStart}"></label><label style="flex:1">Day ends<input type="time" id="weCfg" value="${s.workEnd}"></label></div>
       <div class="row"><label style="flex:1">Pomodoro (min)<input type="number" min="5" step="5" id="pomoCfg" value="${s.pomoMins}"></label><label style="flex:1">Break (min)<input type="number" min="1" id="breakCfg" value="${s.breakMins}"></label></div>
-      <button class="ghost" data-action="saveEngineCfg">Save</button>
+      <button class="primary" data-action="saveEngineCfg" style="margin-top:6px">Save</button>
       <p id="engineMsg" class="muted small"></p>
-    </section>
-    <section class="card"><h3 class="sech tight">AI assist (optional)</h3>
-      <p class="muted small">Task breakdown & daily suggestions. Key stays on this device.</p>
+    </section>`;
+  const aiCard = `<section class="card"><h3 class="sech tight">AI assist (optional)</h3>
+      <p class="muted small">Task breakdown &amp; daily suggestions. Key stays on this device.</p>
       <label>Provider<select id="aiProvider">${['anthropic', 'openai', 'gemini'].map((p) => `<option ${cfg.provider === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
       <label>Model<input id="aiModel" value="${esc(cfg.model)}"></label>
       <label>API key<input id="aiKey" type="password" value="${esc(cfg.apiKey)}" placeholder="sk-…"></label>
-      <button class="ghost" data-action="saveAi">Save AI settings</button>
-      <button class="ghost" data-action="testAi">🧪 Test connection</button>
+      <button class="primary" data-action="saveAi" style="margin-top:6px">Save AI settings</button>
+      <button class="ghost" data-action="testAi" style="margin-top:8px">Test connection</button>
       <p id="aiMsg" class="muted small">${cfg.apiKey ? '● Key saved on this device.' : ''}</p>
     </section>`;
+  if (isWide()) return `<div class="two-col"><div>${sync}${data}</div><div>${engine}${aiCard}</div></div>`;
+  return `${sync}${data}${engine}${aiCard}`;
 }
 
 // ---------- task editor (overlay) ----------
@@ -477,10 +618,10 @@ function openEditor(id) {
     <div class="sheetHead"><h3>${id ? 'Edit task' : 'New task'}</h3><button class="iconBtn" data-action="closeOverlay" aria-label="Close">✕</button></div>
     <label class="fld">Task<input class="in" id="eTitle" value="${esc(e.title)}" placeholder="What needs doing?"></label>
     <label class="fld">Notes<textarea class="in" id="eNotes" placeholder="Details, links…">${esc(e.notes || '')}</textarea></label>
-    <div class="fld">Priority (Eisenhower)</div><div class="toggles">${tg(e.important, 'important', '1', '⭐ Important')}${tg(e.urgent, 'urgent', '1', '⏰ Urgent')}</div>
-    <div class="fld">Work type</div><div class="toggles">${tg(e.depth === 'deep', 'depth', 'deep', '🧠 Deep')}${tg(e.depth !== 'deep', 'depth', 'shallow', '⚡ Shallow')}</div>
-    <div class="fld">Context</div><div class="toggles wrap">${Object.keys(CTX_EMOJI).map((c) => tg(e.context === c, 'context', c, CTX_EMOJI[c] + ' ' + c)).join('')}</div>
-    <div class="fld">When</div><div class="toggles wrap">${['inbox', 'today', 'tomorrow', 'later', 'someday'].map((b) => tg(e.bucket === b, 'bucket', b, b)).join('')}</div>
+    <div class="fld">Priority (Eisenhower)</div><div class="toggles">${tg(e.important, 'important', '1', icon('star', 12) + 'Important')}${tg(e.urgent, 'urgent', '1', icon('clockMini', 12) + 'Urgent')}</div>
+    <div class="fld">Work type</div><div class="toggles">${tg(e.depth === 'deep', 'depth', 'deep', icon('bolt', 11) + 'Deep')}${tg(e.depth !== 'deep', 'depth', 'shallow', icon('ring', 11) + 'Shallow')}</div>
+    <div class="fld">Context</div><div class="toggles ctxgrid">${['work', 'home', 'outdoor', 'digital', 'family', 'personal'].map((c) => tg(e.context === c, 'context', c, icon(c, 12) + CONTEXT_LABEL[c])).join('')}</div>
+    <div class="fld">When</div><div class="toggles wrap">${['inbox', 'today', 'tomorrow', 'later', 'someday'].map((b) => tg(e.bucket === b, 'bucket', b, BUCKET_LABEL[b])).join('')}</div>
     <div class="row"><label class="fld" style="flex:1">Estimate (min)<input class="in" type="number" min="1" step="5" id="eEst" value="${e.effortMins || ''}"></label><label class="fld" style="flex:1">Due (soft)<input class="in" type="date" id="eDue" value="${e.dueDate || ''}"></label></div>
     <label class="fld">Deadline (immovable)<input class="in" type="date" id="eDeadline" value="${e.deadline || ''}"></label>
     <label class="fld">Goal<select class="in" id="eGoal"><option value="">— no goal —</option>${st.goals.map((g) => `<option value="${g.id}" ${(e.goalIds || [])[0] === g.id ? 'selected' : ''}>${esc(g.title.split(':')[0])}</option>`).join('')}</select></label>
@@ -557,21 +698,27 @@ function openFocus(taskId) {
   renderFocus(t);
   pomo.timer = setInterval(tickFocus, 1000);
 }
+const POMO_CIRC = 2 * Math.PI * 66; // ring circumference (r=66)
 function renderFocus(t) {
-  const pct = Math.round((1 - pomo.remain / pomo.total) * 100);
+  const offset = POMO_CIRC * (pomo.remain / pomo.total);
   overlay().innerHTML = `<div class="scrim"></div><div class="sheet focus">
-    <div class="flabel2">${pomo.mode === 'focus' ? '🧠 Deep focus' : '☕ Break'}</div>
-    <div class="pomoClock" id="pomoClock">${fmtClock(pomo.remain)}</div>
+    <div class="flabel2">${pomo.mode === 'focus' ? 'Deep focus' : 'Break'}</div>
+    <div class="pomoWrap">
+      <svg width="150" height="150" viewBox="0 0 150 150">
+        <circle cx="75" cy="75" r="66" fill="none" stroke="var(--bg)" stroke-width="10"></circle>
+        <circle id="pomoRing" cx="75" cy="75" r="66" fill="none" stroke="var(--good)" stroke-width="10" stroke-linecap="round" stroke-dasharray="${POMO_CIRC.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}"></circle>
+      </svg>
+      <div class="pomoClock" id="pomoClock">${fmtClock(pomo.remain)}</div>
+    </div>
     <div class="ftitle2">${esc(t ? t.title : 'Focus session')}</div>
-    <div class="bar big"><span id="pomoRing" style="width:${pct}%"></span></div>
-    <div class="btnrow" style="margin-top:18px"><button class="primary" data-action="focusDone">✓ Done early</button><button class="ghost" data-action="focusCancel">Stop</button></div>
+    <div class="focusbtns"><button class="primary" data-action="focusDone">✓ Done early</button><button class="stop" data-action="focusCancel">Stop</button></div>
     <p class="muted small" style="text-align:center;margin-top:12px">${pomo.mode === 'focus' ? 'Logs ' + pomo.mins + ' deep-work minutes when the timer ends.' : 'Stretch, breathe, hydrate.'}</p>
   </div>`;
 }
 function tickFocus() {
   pomo.remain--;
   const c = $('#pomoClock'); if (c) c.textContent = fmtClock(pomo.remain);
-  const ring = $('#pomoRing'); if (ring) ring.style.width = Math.round((1 - pomo.remain / pomo.total) * 100) + '%';
+  const ring = $('#pomoRing'); if (ring) ring.setAttribute('stroke-dashoffset', (POMO_CIRC * (Math.max(0, pomo.remain) / pomo.total)).toFixed(2));
   if (pomo.remain <= 0) finishFocusPhase();
 }
 function finishFocusPhase() {
@@ -638,7 +785,14 @@ async function onClick(e) {
     case 'newTask': openEditor(null); break;
     case 'edit': openEditor(id); break;
     case 'saveTask': saveTaskFromEditor(); break;
-    case 'deleteTask': store.deleteTask(id); ensureDailyFrog(); editing = null; closeOverlay(); render(); break;
+    case 'deleteTask': if (selectedTaskId === id) selectedTaskId = null; store.deleteTask(id); ensureDailyFrog(); editing = null; closeOverlay(); render(); break;
+    case 'selectTask': selectedTaskId = id; render(); break;
+    case 'detImportant': store.toggleFlag(id, 'important'); break;
+    case 'detUrgent': store.toggleFlag(id, 'urgent'); break;
+    case 'detDeep': store.setDepth(id, 'deep'); break;
+    case 'detShallow': store.setDepth(id, 'shallow'); break;
+    case 'detCtx': store.patchTask(id, { context: btn.dataset.c }); break;
+    case 'detBucket': store.setTaskBucket(id, btn.dataset.b); break;
     case 'closeOverlay': closeOverlay(); break;
     case 'toggle': { const t = st.tasks.find((x) => x.id === id); if (t) (t.status === 'done' ? store.uncompleteTask(id) : store.completeTask(id)); break; }
     case 'bucket': store.setTaskBucket(id, btn.dataset.b); break;
@@ -665,10 +819,10 @@ async function onClick(e) {
     }
     case 'setTomorrowFrog': { const sel = $('#frogSel').value; const tomorrow = store.addDays(store.todayStr(), 1); if (sel) store.setFrog(sel, tomorrow); else { const sug = suggestFrog(st, { today: tomorrow }); if (sug.task) store.setFrog(sug.task.id, tomorrow); } render(); break; }
     case 'finishWeekly': store.getState().lastWeeklyReview = store.todayStr(); store.save(); break;
-    case 'setBudget': break;
+    case 'setBudget': st.settings.dailyBudgetMins = parseInt(btn.dataset.m, 10) || 120; store.save(); break;
     case 'decompose': {
       const t = st.tasks.find((x) => x.id === id); if (!t) break;
-      btn.textContent = '⚡ Thinking…'; btn.disabled = true;
+      btn.textContent = 'Thinking…'; btn.disabled = true;
       const out = await ai.decomposeTask(t);
       store.patchTask(id, { nextAction: out.nextAction });
       for (const subTitle of out.subtasks) store.upsertTask({ title: subTitle, parentId: id, goalIds: t.goalIds, context: t.context, priority: t.priority, effortMins: 20, bucket: 'later' });
@@ -700,11 +854,6 @@ async function onClick(e) {
     case 'signout': await signOutUser(); break;
   }
 }
-
-document.addEventListener('change', (e) => {
-  const sel = e.target.closest('[data-action="setBudget"]');
-  if (sel) { S().settings.dailyBudgetMins = parseInt(sel.value, 10); store.save(); }
-});
 
 async function onImport(e) {
   const file = e.target.files[0]; if (!file) return;
