@@ -100,6 +100,8 @@ export function normTask(t) {
     urgent: !!t.urgent,                // Eisenhower
     depth: t.depth === 'deep' ? 'deep' : 'shallow', // Deep Work
     recur: RECUR.includes(t.recur) ? t.recur : 'none',
+    spawnedFrom: t.spawnedFrom || null, // recurrence: the task whose completion spawned this
+    spawnedNextId: t.spawnedNextId || null, // recurrence: the next instance this completion spawned
     createdAt: t.createdAt || new Date().toISOString(),
     completedAt: t.completedAt || null,
   };

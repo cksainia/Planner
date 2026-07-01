@@ -39,7 +39,7 @@ const libs = ['js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'j
 
 // rebuild the namespace objects app.js expects (it uses `store.x` / `ai.x`)
 const namespaces = `
-  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, todayStr, addDays, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd };
+  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd };
   const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay };
 `;
 
@@ -113,6 +113,26 @@ try {
     var winsBefore = store.getState().wins.length;
     document.querySelector('[data-action=toggle]').click();
     RESULTS.push([store.getState().wins.length === winsBefore + 1, 'checkbox toggle completes a task and logs a win']);
+
+    // 10) goal CRUD (fix #2): open editor, create a 'count' goal, save
+    view='goals'; render();
+    document.querySelector('[data-action=newGoal]').click();
+    RESULTS.push([!!document.querySelector('#overlay #gTitle'), 'goal editor opens in the overlay']);
+    document.querySelector('#gTitle').value = 'Reading';
+    document.querySelector('#gMetric').value = 'count';
+    document.querySelector('#gTarget').value = '12';
+    document.querySelector('[data-action=saveGoal]').click();
+    RESULTS.push([store.getState().goals.some(function(g){return g.title==='Reading' && g.metric==='count';}), 'goal editor creates a count goal']);
+
+    // 11) book tracker (fix #3): the reading-list card appears for a count goal
+    render();
+    RESULTS.push([!!document.querySelector('[data-action=addBook]'), 'reading-list card appears once a count goal exists']);
+    document.querySelector('#bookIn').value = 'Deep Work';
+    document.querySelector('[data-action=addBook]').click();
+    var bk = store.getState().books.find(function(b){return b.title==='Deep Work';});
+    RESULTS.push([!!bk, 'addBook creates a book']);
+    document.querySelector('[data-action=cycleBook][data-id="'+bk.id+'"]').click();
+    RESULTS.push([store.getState().books.find(function(b){return b.id===bk.id;}).status==='reading', 'cycleBook advances unread->reading']);
   `);
 
   let pass = 0, fail = 0;

@@ -132,17 +132,25 @@ export function completeTask(id) {
 }
 
 // Recurring tasks: on completion, schedule the next instance (later bucket).
+// Idempotent — completing/uncompleting repeatedly never accumulates duplicates.
 function spawnRecurrence(t) {
+  if (!t.recur || t.recur === 'none') return;
+  // Already spawned an untouched next instance? Don't create another.
+  if (t.spawnedNextId && state.tasks.some((x) => x.id === t.spawnedNextId && x.status !== 'done')) return;
   const base = t.dueDate || t.deadline || todayStr();
-  const step = { daily: 1, weekly: 7, monthly: 30 }[t.recur];
-  if (!step) return;
-  const next = addDays(base, step);
-  state.tasks.push(normTask({
-    title: t.title, notes: t.notes, goalIds: t.goalIds, projectId: t.projectId,
+  const next = t.recur === 'monthly' ? addMonths(base, 1) : addDays(base, { daily: 1, weekly: 7 }[t.recur] || 1);
+  const hasDeadline = !!t.deadline;
+  const child = normTask({
+    title: t.title, notes: t.notes, ref: t.ref, goalIds: t.goalIds, projectId: t.projectId,
     context: t.context, priority: t.priority, effortMins: t.effortMins,
     important: t.important, urgent: t.urgent, depth: t.depth, recur: t.recur,
-    dueDate: t.dueDate ? next : null, deadline: t.deadline ? next : null, bucket: 'later',
-  }));
+    // Always carry a sensible next date so "daily/weekly/monthly" actually schedules
+    // forward (a hard deadline stays a deadline; otherwise it's a soft due date).
+    dueDate: hasDeadline ? null : next, deadline: hasDeadline ? next : null,
+    bucket: 'later', spawnedFrom: t.id,
+  });
+  state.tasks.push(child);
+  t.spawnedNextId = child.id;
 }
 
 // --- methodology mutators (AI-Planner) ---
@@ -201,6 +209,15 @@ export function uncompleteTask(id) {
   t.status = 'todo';
   t.completedAt = null;
   state.wins = state.wins.filter((w) => w.taskId !== id);
+  // Undo the recurrence spawn from this completion, but only if it's still
+  // untouched (no work logged) — never delete an instance the user acted on.
+  if (t.spawnedNextId) {
+    const child = state.tasks.find((x) => x.id === t.spawnedNextId);
+    if (child && child.status !== 'done' && !child.completedAt) {
+      state.tasks = state.tasks.filter((x) => x.id !== child.id);
+    }
+    t.spawnedNextId = null;
+  }
   save();
   return t;
 }
@@ -216,6 +233,13 @@ export function upsertGoal(g) {
   else state.goals.push(g);
   save();
   return g;
+}
+
+export function deleteGoal(id) {
+  state.goals = state.goals.filter((g) => g.id !== id);
+  // detach the goal from any tasks so they don't dangle (keep the tasks).
+  for (const t of state.tasks) if ((t.goalIds || []).includes(id)) t.goalIds = t.goalIds.filter((g) => g !== id);
+  save();
 }
 
 export function addWin({ text, goalId = null, taskId = null, date = null }, { push = true } = {}) {
@@ -257,6 +281,7 @@ export function upsertBook(b) {
   save();
   return b;
 }
+export function deleteBook(id) { state.books = state.books.filter((b) => b.id !== id); save(); }
 
 // ---------- date helpers ----------
 export function todayStr(d = new Date()) {
@@ -265,5 +290,15 @@ export function todayStr(d = new Date()) {
 export function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
+  return todayStr(d);
+}
+// Calendar-month step (clamps overflow: Jan 31 + 1mo -> Feb 28/29, not Mar 3).
+export function addMonths(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
   return todayStr(d);
 }

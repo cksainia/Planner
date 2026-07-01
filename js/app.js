@@ -20,6 +20,7 @@ let unsubDoc = null;
 let booted = false;
 let editing = null; // task-editor working state
 let pomo = null;    // pomodoro session
+let syncStatus = 'ok'; // 'ok' | 'error' — surfaced in the header when a cloud write fails
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = () => $('#app');
@@ -42,11 +43,13 @@ function boot() {
       user = u;
       if (unsubDoc) { unsubDoc(); unsubDoc = null; }
       if (u) {
-        store.setPushFn((synced) => writeDoc(u.uid, synced).catch((e) => console.warn('push failed', e)));
+        store.setPushFn((synced) => writeDoc(u.uid, synced).then(() => setSync('ok'))
+          .catch((e) => { console.warn('push failed', e); setSync('error'); }));
         unsubDoc = watchDoc(u.uid, (data) => {
           if (data) store.applyCloud(data); else store.cloudInitEmpty();
           store.doRollover();
-        });
+          startDay();
+        }, () => setSync('error'));
       } else { store.setPushFn(null); }
       booted = true;
       render();
@@ -54,31 +57,87 @@ function boot() {
   } else {
     store.cloudInitEmpty();
     store.doRollover();
+    startDay();
     booted = true;
     render();
   }
 }
 
+// Update sync status and refresh the header badge (only when it actually changes).
+function setSync(s) { if (s === syncStatus) return; syncStatus = s; if (booted) render(); }
+
+// Once-per-day setup done OFF the render path (never write during render): pick
+// the day's frog if none, and stamp the engine's must-do set so the evening
+// review counts the plan the user actually worked from.
+function startDay() { ensureDailyFrog(); ensureDailyPlan(); }
+function ensureDailyFrog() {
+  const st = S();
+  if (store.needsSeed()) return;
+  const today = store.todayStr();
+  const fid = store.getFrogId(today);
+  const cur = fid && st.tasks.find((t) => t.id === fid && t.status !== 'done');
+  if (!cur) { const sug = suggestFrog(st, {}); if (sug.task) store.setFrog(sug.task.id, today); }
+}
+function ensureDailyPlan() {
+  const st = S();
+  if (store.needsSeed()) return;
+  const today = store.todayStr();
+  const plan = st.dailyPlan[today] || {};
+  if (plan.stamped === today) return; // already captured today's plan
+  const frogId = store.getFrogId(today);
+  const r = buildDailyList(st, { today, budgetMins: st.settings.dailyBudgetMins, frogId });
+  store.setDailyPlan(today, { mustDoIds: r.mustDo.map((i) => i.task.id), capacityMins: st.settings.dailyBudgetMins, stamped: today });
+}
+
 // ---------- top-level render ----------
 let rendering = false;
+let lastView = null;
 function render() {
-  if (rendering) return;          // guard: mutations during render (e.g. frog auto-pick) won't nest
+  if (rendering) return;          // guard: mutations during render won't nest
   rendering = true;
   try { renderInner(); } finally { rendering = false; }
 }
 function renderInner() {
   if (isConfigured() && !user) { renderSignIn(); return; }
+  // Preserve scroll + focus across in-place updates so completing/triaging a task
+  // deep in a list doesn't bounce the user to the top or drop their caret.
+  const samePage = lastView === view;
+  const scrollEl = document.scrollingElement || document.documentElement;
+  const prevScroll = samePage ? scrollEl.scrollTop : 0;
+  const active = document.activeElement;
+  const focusId = samePage && active && active.id && app().contains(active) ? active.id : null;
+  const caret = (focusId && 'selectionStart' in active) ? active.selectionStart : null;
+
   const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, reflect: viewReflect, settings: viewSettings }[view] || viewToday;
   app().innerHTML = `
     <header class="topbar">
       <div class="brand">🎯 Life Planner</div>
-      <div class="sub">${esc(humanDate(store.todayStr()))} · 🔥 ${computeStreak(S())}-day streak</div>
+      <div class="sub">${esc(humanDate(store.todayStr()))} · ${streakLabel(S())}${syncBadge()}</div>
     </header>
     <main class="screen">${body()}</main>
     <nav class="tabbar">
       ${tab('today', '📋', 'Today')}${tab('tasks', '🗂️', 'Tasks')}${tab('goals', '🎯', 'Goals')}${tab('reflect', '🌙', 'Reflect')}${tab('settings', '⚙️', 'Setup')}
     </nav>`;
   wire();
+  lastView = view;
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    if (el) { try { el.focus({ preventScroll: true }); if (caret != null && 'selectionStart' in el) el.setSelectionRange(caret, caret); } catch (e) {} }
+  }
+  scrollEl.scrollTop = prevScroll;
+}
+// Streak reads "extended today" once today is active, else "intact (grace)" so the
+// header doesn't imply activity on a day nothing's been done yet (#13).
+function streakLabel(st) {
+  const n = computeStreak(st);
+  if (!n) return 'No streak yet';
+  const active = (st.wins || []).some((w) => w.date === store.todayStr());
+  return `🔥 ${n}-day streak${active ? '' : ' · keep it alive'}`;
+}
+function syncBadge() {
+  if (!isConfigured() || !user) return '';
+  if (syncStatus === 'error') return ' · <span class="syncerr" title="Last cloud write failed — changes are saved on this device and will retry.">⚠️ sync failed</span>';
+  return '';
 }
 function tab(id, icon, label) {
   return `<button class="tabbtn ${view === id ? 'active' : ''}" data-nav="${id}"><span>${icon}</span>${label}</button>`;
@@ -104,8 +163,8 @@ function renderSignIn() {
 // ---------- quick-add bar ----------
 function quickBar() {
   return `<div class="quickbar">
-    <input id="quickIn" placeholder="Quick add… e.g. Draft Q3 deck ! ~ 2h #Q3 tomorrow">
-    <button class="ghost" data-action="quickAdd">＋</button>
+    <input id="quickIn" aria-label="Quick add a task" placeholder="Quick add… e.g. Draft Q3 deck ! ~ 2h #Q3 tomorrow">
+    <button class="ghost" data-action="quickAdd" aria-label="Add task">＋</button>
   </div>
   <div class="quickhint muted small">! important · * urgent · ~ deep · #project · @work · 30m/2h · today/tomorrow/later</div>`;
 }
@@ -115,10 +174,12 @@ function viewToday() {
   const st = S();
   if (store.needsSeed()) return emptyStateCard();
   const today = store.todayStr();
-  // ensure a frog is chosen for the day (re-pick if the chosen one was deleted)
+  // Read the day's frog for display only — persistence happens in startDay()/on
+  // delete, never during render. If the stored frog was deleted, fall back to the
+  // suggestion just for this paint (startDay persists it on the next load/delete).
   let frogId = store.getFrogId(today);
   let frog = frogId ? st.tasks.find((t) => t.id === frogId) : null;
-  if (!frog) { const sug = suggestFrog(st, {}); if (sug.task) { store.setFrog(sug.task.id, today); frogId = sug.task.id; frog = sug.task; } else { frogId = null; } }
+  if (!frog) { const sug = suggestFrog(st, {}); frog = sug.task || null; frogId = frog ? frog.id : null; }
 
   const budget = st.settings.dailyBudgetMins;
   const plan = st.dailyPlan[today] || {};
@@ -127,11 +188,11 @@ function viewToday() {
   const deepTarget = st.settings.deepTargetMins || 120;
 
   const frogHtml = frog ? `<div class="frog ${frog.status === 'done' ? 'done' : ''}">
-      <button class="chk" data-action="toggle" data-id="${frog.id}">${frog.status === 'done' ? '✅' : '⬜'}</button>
+      <button class="chk" data-action="toggle" data-id="${frog.id}" aria-label="${frog.status === 'done' ? 'Mark frog not done' : 'Mark frog done'}">${frog.status === 'done' ? '✅' : '⬜'}</button>
       <div class="fbody"><div class="flabel">🐸 Eat the frog — your one big win today</div>
         <div class="ftitle">${esc(frog.title)}</div></div>
       <div class="frogbtns"><button class="ghost small" data-action="focus" data-id="${frog.id}">▶ Focus</button>
-        <button class="ghost small" data-action="pickFrog">swap</button></div>
+        <button class="ghost small" data-action="pickFrog" aria-label="Swap the frog">swap</button></div>
     </div>` : '';
 
   const mustDoHtml = r.mustDo.filter((i) => i.task.id !== frogId).map((i) => taskRow(i.task, { showEffort: true, focus: true })).join('')
@@ -143,7 +204,7 @@ function viewToday() {
       <div class="row between">
         <div><strong>Today's focus</strong><div class="muted small">Top ${r.mustDo.length} · ~${r.plannedMins} of ${budget} min</div></div>
         <label class="budget">Budget
-          <select data-action="setBudget">${[30, 60, 90, 120, 180, 240, 360].map((m) => `<option value="${m}" ${m === budget ? 'selected' : ''}>${m}m</option>`).join('')}</select>
+          <select id="budgetSel" data-action="setBudget" aria-label="Daily focus budget">${[30, 60, 90, 120, 180, 240, 360].map((m) => `<option value="${m}" ${m === budget ? 'selected' : ''}>${m}m</option>`).join('')}</select>
         </label>
       </div>
       <div class="deepbar"><div class="row between small"><span>🧠 Deep work today</span><span>${deepDone} / ${deepTarget} min</span></div>
@@ -185,7 +246,7 @@ function tasksByGoal(st) {
     const ts = goalTasks(st, g.id);
     if (!ts.length) continue;
     const done = ts.filter((t) => t.status === 'done').length;
-    html += goalGroup(g.title + ` <span class="muted small">${done}/${ts.length}</span>`, ts);
+    html += goalGroup(esc(g.title) + ` <span class="muted small">${done}/${ts.length}</span>`, ts);
   }
   const standalone = st.tasks.filter((t) => !(t.goalIds || []).length);
   if (standalone.length) html += goalGroup('Standalone', standalone);
@@ -202,7 +263,7 @@ function tasksInbox(st) {
   if (!inbox.length) return `<p class="muted" style="text-align:center;margin:24px">📥 Inbox zero — nicely done. ✨</p>`;
   return `<p class="muted small">Triage: send each to a day, or open to tag a goal.</p><div class="list">${inbox.map((t) => `
     <div class="task" data-id="${t.id}">
-      <button class="chk" data-action="toggle" data-id="${t.id}">⬜</button>
+      <button class="chk" data-action="toggle" data-id="${t.id}" aria-label="Mark done">⬜</button>
       <div class="tbody" data-action="edit" data-id="${t.id}"><div class="ttitle">${esc(t.title)}</div></div>
       <div class="triage">
         <button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button>
@@ -255,7 +316,7 @@ function taskRow(t, { showEffort = false, compact = false, focus = false } = {})
       ${t.nextAction ? `<div class="next">➡ ${esc(t.nextAction)}</div>` : ''}
       ${big && !compact ? `<button class="ghost small" data-action="decompose" data-id="${t.id}">⚡ Break it down</button>` : ''}
     </div>
-    ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer">▶</button>` : ''}
+    ${focus && t.status !== 'done' ? `<button class="focusbtn" data-action="focus" data-id="${t.id}" title="Focus timer" aria-label="Start focus timer">▶</button>` : ''}
   </div>`;
 }
 
@@ -265,12 +326,31 @@ function viewGoals() {
   if (store.needsSeed()) return emptyStateCard();
   const cards = dashboard(st).map(({ goal, progress }) => `
     <div class="card goalcard">
-      <div class="row between"><strong>${esc(goal.title)}</strong><span class="pct">${progress.pct}%</span></div>
+      <div class="row between"><strong>${esc(goal.title)}</strong><span class="row" style="gap:8px;align-items:center"><span class="pct">${progress.pct}%</span><button class="iconBtn" data-action="editGoal" data-id="${goal.id}" aria-label="Edit goal">✎</button></span></div>
       <div class="bar"><span style="width:${progress.pct}%"></span></div>
       <div class="muted small">${esc(progress.label)}${progress.detail ? ' · ' + esc(progress.detail) : ''}</div>
       ${progress.spark && progress.spark.length ? sparkline(progress.spark) : ''}
+    </div>`).join('') || '<p class="muted small">No goals yet — add your first one.</p>';
+  return `${trackersBlock()}
+    <div class="row between"><h3 class="sech" style="margin:0">Goals</h3><button class="ghost" data-action="newGoal">+ Goal</button></div>
+    ${cards}${booksBlock(st)}${rollupBlock()}`;
+}
+// Reading-list tracker — the only path to move a 'count' goal (spec: 12 books).
+function booksBlock(st) {
+  if (!st.goals.some((g) => g.metric === 'count')) return '';
+  const books = st.books || [];
+  const icon = { unread: '⬜', reading: '📖', finished: '✅' };
+  const rows = books.map((b) => `<div class="task">
+      <button class="chk" data-action="cycleBook" data-id="${b.id}" aria-label="Cycle reading status">${icon[b.status] || '⬜'}</button>
+      <div class="tbody"><div class="ttitle ${b.status === 'finished' ? 'done' : ''}">${esc(b.title)}${b.author ? ` <span class="muted small">— ${esc(b.author)}</span>` : ''}</div>
+        <div class="meta"><span class="chip">${esc(b.status)}</span></div></div>
+      <button class="x" data-action="delBook" data-id="${b.id}" aria-label="Delete book">×</button>
     </div>`).join('');
-  return `${trackersBlock()}<h3 class="sech">Goals</h3>${cards}${rollupBlock()}`;
+  const finished = books.filter((b) => b.status === 'finished').length;
+  return `<section class="card"><h3 class="sech tight">📚 Reading list <span class="muted small">${finished} finished</span></h3>
+    <div class="list">${rows || '<p class="muted small">No books yet — add one below.</p>'}</div>
+    <div class="row"><input id="bookIn" aria-label="Book title" placeholder="Add a book title…"><button class="ghost" data-action="addBook" aria-label="Add book">＋ Add</button></div>
+    <p class="muted small">Tap the box to cycle unread → reading → finished.</p></section>`;
 }
 function trackersBlock() {
   const st = S();
@@ -280,7 +360,7 @@ function trackersBlock() {
   const lastW = (st.weightLog[st.weightLog.length - 1] || {}).lbs;
   return `<section class="card"><h3 class="sech tight">Daily trackers</h3>
     <div class="habits">${habits.map((h) => `<button class="habit ${hd[h.id] ? 'on' : ''}" data-action="habit" data-id="${h.id}">${hd[h.id] ? '✅' : '⬜'} ${esc(h.label)}</button>`).join('') || '<span class="muted">No habits configured.</span>'}</div>
-    <div class="row weight"><label>Weight today <input type="number" step="0.1" id="wIn" placeholder="${lastW != null ? lastW : 'lbs'}"></label><button class="ghost" data-action="logWeight">Log</button></div>
+    <div class="row weight"><label>Weight today <input type="number" min="1" step="0.1" id="wIn" placeholder="${lastW != null ? lastW : 'lbs'}"></label><button class="ghost" data-action="logWeight" aria-label="Log today's weight">Log</button></div>
   </section>`;
 }
 function rollupBlock() {
@@ -306,7 +386,7 @@ function viewReflect() {
   const tPlan = st.dailyPlan[tomorrow] || { mustDoIds: [] };
   const tomorrowTasks = st.tasks.filter((t) => t.bucket === 'tomorrow' && t.status !== 'done');
   const cands = eligibleTasks(st, tomorrow).map((t) => ({ t, s: scoreTask(st, t, { today: tomorrow }) })).sort((a, b) => b.s - a.s).slice(0, 8);
-  const winsHtml = sum.wins.map((w) => `<li>${esc(w.text)} <button class="x" data-action="delWin" data-id="${w.id}">×</button></li>`).join('') || '<li class="muted">No wins logged yet.</li>';
+  const winsHtml = sum.wins.map((w) => `<li>${esc(w.text)} <button class="x" data-action="delWin" data-id="${w.id}" aria-label="Delete win">×</button></li>`).join('') || '<li class="muted">No wins logged yet.</li>';
   const md = sum.mustDo;
 
   // weekly review surfaced when 7+ days since last (or never)
@@ -359,7 +439,7 @@ function viewSettings() {
   const s = st.settings;
   return `
     <section class="card"><h3 class="sech tight">Sync</h3>
-      ${synced ? `<div class="muted small">Signed in as <b>${esc(user ? user.email : '')}</b> · cloud sync on.</div><button class="ghost" data-action="signout">Sign out</button>` : `<div class="muted small">Local-only mode. Use Export to back up.</div>`}
+      ${synced ? `<div class="muted small">Signed in as <b>${esc(user ? user.email : '')}</b> · ${syncStatus === 'error' ? '<span class="syncerr">⚠️ last cloud write failed</span> — saved locally, will retry.' : 'cloud sync on ✓'}</div><button class="ghost" data-action="signout">Sign out</button>` : `<div class="muted small">Local-only mode. Use Export to back up.</div>`}
     </section>
     <section class="card"><h3 class="sech tight">Data</h3>
       <p class="muted small">Your goals & tasks are private — bootstrapped from a seed file, never in code.</p>
@@ -367,12 +447,13 @@ function viewSettings() {
       <p id="ioMsg" class="muted small"></p>
     </section>
     <section class="card"><h3 class="sech tight">Daily engine & deep work</h3>
-      <label>Default focus budget (min)<input type="number" id="budgetCfg" value="${s.dailyBudgetMins}"></label>
-      <label>"Big task" threshold (min)<input type="number" id="bigCfg" value="${s.bigTaskThreshold}"></label>
-      <label>Daily deep-work target (min)<input type="number" id="deepCfg" value="${s.deepTargetMins}"></label>
+      <label>Default focus budget (min)<input type="number" min="15" step="15" id="budgetCfg" value="${s.dailyBudgetMins}"></label>
+      <label>"Big task" threshold (min)<input type="number" min="5" step="5" id="bigCfg" value="${s.bigTaskThreshold}"></label>
+      <label>Daily deep-work target (min)<input type="number" min="15" step="15" id="deepCfg" value="${s.deepTargetMins}"></label>
       <div class="row"><label style="flex:1">Day starts<input type="time" id="wsCfg" value="${s.workStart}"></label><label style="flex:1">Day ends<input type="time" id="weCfg" value="${s.workEnd}"></label></div>
-      <div class="row"><label style="flex:1">Pomodoro (min)<input type="number" id="pomoCfg" value="${s.pomoMins}"></label><label style="flex:1">Break (min)<input type="number" id="breakCfg" value="${s.breakMins}"></label></div>
+      <div class="row"><label style="flex:1">Pomodoro (min)<input type="number" min="5" step="5" id="pomoCfg" value="${s.pomoMins}"></label><label style="flex:1">Break (min)<input type="number" min="1" id="breakCfg" value="${s.breakMins}"></label></div>
       <button class="ghost" data-action="saveEngineCfg">Save</button>
+      <p id="engineMsg" class="muted small"></p>
     </section>
     <section class="card"><h3 class="sech tight">AI assist (optional)</h3>
       <p class="muted small">Task breakdown & daily suggestions. Key stays on this device.</p>
@@ -393,14 +474,15 @@ function openEditor(id) {
   const e = editing;
   const tg = (on, act, val, lbl) => `<button class="tg ${on ? 'on' : ''}" data-ed="${act}" data-v="${val}">${lbl}</button>`;
   overlay().innerHTML = `<div class="scrim" data-action="closeOverlay"></div><div class="sheet">
-    <div class="sheetHead"><h3>${id ? 'Edit task' : 'New task'}</h3><button class="iconBtn" data-action="closeOverlay">✕</button></div>
+    <div class="sheetHead"><h3>${id ? 'Edit task' : 'New task'}</h3><button class="iconBtn" data-action="closeOverlay" aria-label="Close">✕</button></div>
     <label class="fld">Task<input class="in" id="eTitle" value="${esc(e.title)}" placeholder="What needs doing?"></label>
     <label class="fld">Notes<textarea class="in" id="eNotes" placeholder="Details, links…">${esc(e.notes || '')}</textarea></label>
     <div class="fld">Priority (Eisenhower)</div><div class="toggles">${tg(e.important, 'important', '1', '⭐ Important')}${tg(e.urgent, 'urgent', '1', '⏰ Urgent')}</div>
     <div class="fld">Work type</div><div class="toggles">${tg(e.depth === 'deep', 'depth', 'deep', '🧠 Deep')}${tg(e.depth !== 'deep', 'depth', 'shallow', '⚡ Shallow')}</div>
     <div class="fld">Context</div><div class="toggles wrap">${Object.keys(CTX_EMOJI).map((c) => tg(e.context === c, 'context', c, CTX_EMOJI[c] + ' ' + c)).join('')}</div>
     <div class="fld">When</div><div class="toggles wrap">${['inbox', 'today', 'tomorrow', 'later', 'someday'].map((b) => tg(e.bucket === b, 'bucket', b, b)).join('')}</div>
-    <div class="row"><label class="fld" style="flex:1">Estimate (min)<input class="in" type="number" id="eEst" value="${e.effortMins || ''}"></label><label class="fld" style="flex:1">Deadline<input class="in" type="date" id="eDeadline" value="${e.deadline || ''}"></label></div>
+    <div class="row"><label class="fld" style="flex:1">Estimate (min)<input class="in" type="number" min="1" step="5" id="eEst" value="${e.effortMins || ''}"></label><label class="fld" style="flex:1">Due (soft)<input class="in" type="date" id="eDue" value="${e.dueDate || ''}"></label></div>
+    <label class="fld">Deadline (immovable)<input class="in" type="date" id="eDeadline" value="${e.deadline || ''}"></label>
     <label class="fld">Goal<select class="in" id="eGoal"><option value="">— no goal —</option>${st.goals.map((g) => `<option value="${g.id}" ${(e.goalIds || [])[0] === g.id ? 'selected' : ''}>${esc(g.title.split(':')[0])}</option>`).join('')}</select></label>
     <div class="row"><label class="fld" style="flex:1">Priority<select class="in" id="ePri">${['p1', 'p2', 'p3', 'p4'].map((p) => `<option ${e.priority === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
       <label class="fld" style="flex:1">Repeat<select class="in" id="eRecur">${['none', 'daily', 'weekly', 'monthly'].map((r) => `<option ${e.recur === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label></div>
@@ -420,7 +502,8 @@ function saveTaskFromEditor() {
   const e = editing; if (!e) return;
   e.title = $('#eTitle').value.trim(); if (!e.title) { $('#eTitle').focus(); return; }
   e.notes = $('#eNotes').value;
-  e.effortMins = parseInt($('#eEst').value, 10) || 30;
+  { const v = parseInt($('#eEst').value, 10); e.effortMins = Number.isFinite(v) && v > 0 ? v : 30; }
+  e.dueDate = $('#eDue').value || null;
   e.deadline = $('#eDeadline').value || null;
   e.priority = $('#ePri').value;
   e.recur = $('#eRecur').value;
@@ -428,6 +511,40 @@ function saveTaskFromEditor() {
   e.goalIds = gid ? [gid] : [];
   store.upsertTask(e);
   editing = null; closeOverlay(); render();
+}
+
+// ---------- goal editor (overlay) ----------
+let editingGoal = null;
+const GOAL_METRICS = [
+  ['taskPercent', '% of linked tasks done'], ['weight', 'Weight (lbs lost)'],
+  ['count', 'Count (e.g. books read)'], ['shipped', 'Deliverables shipped'],
+  ['habit', 'Habit adherence'], ['none', 'No numeric metric'],
+];
+function openGoalEditor(id) {
+  const st = S();
+  const g = id ? st.goals.find((x) => x.id === id) : null;
+  editingGoal = g ? { ...g } : { id: null, title: '', metric: 'taskPercent', target: null, baseline: null, weight: 3, status: 'in_progress' };
+  const e = editingGoal;
+  overlay().innerHTML = `<div class="scrim" data-action="closeOverlay"></div><div class="sheet">
+    <div class="sheetHead"><h3>${id ? 'Edit goal' : 'New goal'}</h3><button class="iconBtn" data-action="closeOverlay" aria-label="Close">✕</button></div>
+    <label class="fld">Goal<input class="in" id="gTitle" value="${esc(e.title)}" placeholder="What do you want to achieve?"></label>
+    <label class="fld">Progress metric<select class="in" id="gMetric">${GOAL_METRICS.map(([v, l]) => `<option value="${v}" ${e.metric === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div class="row"><label class="fld" style="flex:1">Target<input class="in" type="number" id="gTarget" value="${e.target ?? ''}" placeholder="e.g. 12 or 40"></label>
+      <label class="fld" style="flex:1">Baseline<input class="in" type="number" id="gBaseline" value="${e.baseline ?? ''}" placeholder="start value"></label></div>
+    <label class="fld">Importance 1–5 (drives task priority)<input class="in" type="number" min="1" max="5" id="gWeight" value="${e.weight ?? 3}"></label>
+    <div class="btnrow"><button class="primary" data-action="saveGoal">${id ? 'Save' : 'Add goal'}</button>${id ? `<button class="ghost" data-action="deleteGoal" data-id="${id}" style="color:var(--p1)">Delete</button>` : ''}</div>
+    ${id ? '<p class="muted small">Deleting a goal keeps its tasks — they just become unlinked.</p>' : ''}
+  </div>`;
+}
+function saveGoalFromEditor() {
+  const e = editingGoal; if (!e) return;
+  e.title = $('#gTitle').value.trim(); if (!e.title) { $('#gTitle').focus(); return; }
+  e.metric = $('#gMetric').value;
+  const tg = parseFloat($('#gTarget').value); e.target = Number.isFinite(tg) ? tg : null;
+  const bl = parseFloat($('#gBaseline').value); e.baseline = Number.isFinite(bl) ? bl : null;
+  const w = parseInt($('#gWeight').value, 10); e.weight = Number.isFinite(w) ? Math.max(1, Math.min(5, w)) : 3;
+  store.upsertGoal(e);
+  editingGoal = null; closeOverlay(); render();
 }
 
 // ---------- pomodoro (overlay) ----------
@@ -491,7 +608,7 @@ function openFrogPicker() {
   </div>`;
 }
 
-function closeOverlay() { overlay().innerHTML = ''; editing = null; }
+function closeOverlay() { overlay().innerHTML = ''; editing = null; editingGoal = null; }
 
 // ---------- event wiring ----------
 function wire() {
@@ -499,6 +616,7 @@ function wire() {
   app().addEventListener('click', onClick);
   const imp = $('#importFile'); if (imp) imp.addEventListener('change', onImport);
   const q = $('#quickIn'); if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doQuickAdd(); });
+  const bk = $('#bookIn'); if (bk) bk.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const t = bk.value.trim(); if (t) store.upsertBook({ title: t }); } });
 }
 function doQuickAdd() {
   const el = $('#quickIn'); if (!el) return;
@@ -520,7 +638,7 @@ async function onClick(e) {
     case 'newTask': openEditor(null); break;
     case 'edit': openEditor(id); break;
     case 'saveTask': saveTaskFromEditor(); break;
-    case 'deleteTask': store.deleteTask(id); editing = null; closeOverlay(); render(); break;
+    case 'deleteTask': store.deleteTask(id); ensureDailyFrog(); editing = null; closeOverlay(); render(); break;
     case 'closeOverlay': closeOverlay(); break;
     case 'toggle': { const t = st.tasks.find((x) => x.id === id); if (t) (t.status === 'done' ? store.uncompleteTask(id) : store.completeTask(id)); break; }
     case 'bucket': store.setTaskBucket(id, btn.dataset.b); break;
@@ -529,8 +647,15 @@ async function onClick(e) {
     case 'focusCancel': closeFocus(false); break;
     case 'pickFrog': openFrogPicker(); break;
     case 'chooseFrog': store.setFrog(id); closeOverlay(); render(); break;
+    case 'newGoal': openGoalEditor(null); break;
+    case 'editGoal': openGoalEditor(id); break;
+    case 'saveGoal': saveGoalFromEditor(); break;
+    case 'deleteGoal': store.deleteGoal(id); closeOverlay(); render(); break;
+    case 'addBook': { const el = $('#bookIn'); const t = (el && el.value || '').trim(); if (t) store.upsertBook({ title: t }); break; }
+    case 'cycleBook': { const b = (st.books || []).find((x) => x.id === id); if (b) { const nx = { unread: 'reading', reading: 'finished', finished: 'unread' }[b.status] || 'reading'; store.upsertBook({ id: b.id, status: nx, finishedDate: nx === 'finished' ? store.todayStr() : null }); } break; }
+    case 'delBook': store.deleteBook(id); break;
     case 'habit': store.toggleHabit(id); break;
-    case 'logWeight': { const v = parseFloat($('#wIn').value); if (!isNaN(v)) store.logWeight(v); break; }
+    case 'logWeight': { const v = parseFloat($('#wIn').value); if (!isNaN(v) && v > 0) store.logWeight(v); break; }
     case 'addWin': { const text = $('#winText').value.trim(); if (text) store.addWin({ text, goalId: $('#winGoal').value || null }); break; }
     case 'delWin': store.deleteWin(id); break;
     case 'brainAdd': {
@@ -553,14 +678,15 @@ async function onClick(e) {
     case 'export': downloadJSON(); break;
     case 'saveEngineCfg': {
       const s = st.settings;
-      s.dailyBudgetMins = parseInt($('#budgetCfg').value, 10) || 120;
-      s.bigTaskThreshold = parseInt($('#bigCfg').value, 10) || 60;
-      s.deepTargetMins = parseInt($('#deepCfg').value, 10) || 120;
+      const posInt = (sel, def, min = 1) => { const v = parseInt($(sel).value, 10); return Number.isFinite(v) && v >= min ? v : def; };
+      s.dailyBudgetMins = posInt('#budgetCfg', 120, 15);
+      s.bigTaskThreshold = posInt('#bigCfg', 60, 5);
+      s.deepTargetMins = posInt('#deepCfg', 120, 15);
       s.workStart = $('#wsCfg').value || '09:00';
       s.workEnd = $('#weCfg').value || '18:00';
-      s.pomoMins = parseInt($('#pomoCfg').value, 10) || 25;
-      s.breakMins = parseInt($('#breakCfg').value, 10) || 5;
-      store.save(); break;
+      s.pomoMins = posInt('#pomoCfg', 25, 5);
+      s.breakMins = posInt('#breakCfg', 5, 1);
+      msg('#engineMsg', 'Saved ✓'); store.save(); break;
     }
     case 'saveAi': { ai.setConfig({ provider: $('#aiProvider').value, model: $('#aiModel').value.trim(), apiKey: $('#aiKey').value.trim() }); msg('#aiMsg', 'Saved ✓ — hit Test connection to verify.'); break; }
     case 'testAi': {

@@ -185,12 +185,14 @@
   deleteTask('par');
   ok(!getState().tasks.find(function (x) { return x.id === 'par' || x.id === 'kid'; }), 'deleteTask cascades to subtasks');
 
-  // recurrence with NO dates -> spawns a later task, no due, recur preserved
+  // recurrence with NO dates -> spawns a DATED later task (fix #4): the next
+  // instance gets a soft due date so "weekly" actually schedules forward.
   var rec2 = upsertTask({ id: 'rec2', title: 'weekly sync', recur: 'weekly', bucket: 'later' });
   var n0 = getState().tasks.length;
   completeTask('rec2');
   var sp = getState().tasks.filter(function (x) { return x.id !== 'rec2' && x.title === 'weekly sync'; })[0];
-  ok(getState().tasks.length === n0 + 1 && sp && sp.recur === 'weekly' && sp.dueDate === null && sp.bucket === 'later', 'recurrence w/o dates spawns clean later task');
+  var expDue = addDays(todayStr(), 7);
+  ok(getState().tasks.length === n0 + 1 && sp && sp.recur === 'weekly' && sp.dueDate === expDue && sp.deadline === null && sp.bucket === 'later', 'recurrence w/o dates spawns a dated later task');
 
   // import roundtrip preserves methodology fields
   importState({ goals: [], tasks: [{ id: 'z', title: 'z', bucket: 'today', important: true, depth: 'deep', urgent: true }], seedVersion: 1 }, { markSeed: true });
@@ -248,4 +250,53 @@
   db.goals = [normGoal({ id: 'gb', title: 'B', metric: 'count', target: 12 })];
   db.books = [{ id: '1', status: 'finished' }, { id: '2', status: 'finished' }, { id: '3', status: 'finished' }, { id: '4', status: 'reading' }];
   ok(goalProgress(db, db.goals[0]).pct === 25, 'reading goal = 25% (3 of 12 books)');
+})();
+
+// ---------------- QA: fixes from external senior-QA review ----------------
+(function () {
+  // #7 parser: only TRAILING bare directives strip; leading/mid words survive
+  ok(parseQuick('Today show notes', {}).title === 'Today show notes', 'parser: leading "Today" stays in the title');
+  ok(parseQuick('Today show notes', {}).bucket === undefined, 'parser: leading "Today" is NOT read as a bucket');
+  ok(parseQuick('Prepare report later', {}).bucket === 'later' && parseQuick('Prepare report later', {}).title === 'Prepare report', 'parser: trailing "later" is honoured as a bucket');
+  ok(parseQuick('deep', {}).title === 'deep', 'parser: a single word "deep" stays as the title');
+  ok(parseQuick('Deep dive on infra ~', {}).depth === 'deep' && parseQuick('Deep dive on infra ~', {}).title === 'Deep dive on infra', 'parser: mid-title "Deep" survives; ~ sets depth');
+  // #8 combined durations
+  ok(parseQuick('Draft deck 2h30m', {}).effortMins === 150, 'parser: 2h30m => 150 min');
+  ok(parseQuick('Ship it 1h30m', {}).effortMins === 90, 'parser: 1h30m => 90 min');
+
+  // #4 recurrence: idempotent spawn, uncomplete-undo, always-dated, calendar month
+  importState({ goals: [], tasks: [], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  upsertTask({ id: 'rc', title: 'daily', recur: 'daily', dueDate: '2026-06-30', bucket: 'later' });
+  completeTask('rc');
+  var afterFirst = getState().tasks.length;
+  completeTask('rc'); // already done -> no-op, must not duplicate
+  ok(getState().tasks.length === afterFirst, 'recurrence: re-completing never duplicates the spawn');
+  uncompleteTask('rc');
+  ok(getState().tasks.filter(function (x) { return x.title === 'daily' && x.id !== 'rc'; }).length === 0, 'recurrence: uncompleting removes the untouched spawn');
+  ok(getState().tasks.find(function (x) { return x.id === 'rc'; }).spawnedNextId === null, 'recurrence: spawn pointer cleared on uncomplete');
+  ok(addMonths('2026-01-31', 1) === '2026-02-28', 'addMonths: Jan 31 + 1mo clamps to Feb 28');
+  ok(addMonths('2026-06-30', 1) === '2026-07-30', 'addMonths: advances one calendar month');
+  upsertTask({ id: 'rm', title: 'monthly bill', recur: 'monthly', dueDate: '2026-01-31', bucket: 'later' });
+  completeTask('rm');
+  var msp = getState().tasks.filter(function (x) { return x.title === 'monthly bill' && x.id !== 'rm'; })[0];
+  ok(msp && msp.dueDate === '2026-02-28', 'recurrence: monthly advances by a calendar month');
+
+  // #2 goal CRUD + delete unlinks tasks (keeps them)
+  importState({ goals: [{ id: 'g1', title: 'Old', weight: 3 }], tasks: [{ id: 't1', title: 'linked', goalIds: ['g1'] }], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  upsertGoal({ id: 'g1', title: 'Renamed', metric: 'count', target: 12, weight: 5 });
+  var g = getState().goals.find(function (x) { return x.id === 'g1'; });
+  ok(g.title === 'Renamed' && g.metric === 'count' && g.target === 12, 'upsertGoal edits title/metric/target');
+  deleteGoal('g1');
+  ok(!getState().goals.find(function (x) { return x.id === 'g1'; }), 'deleteGoal removes the goal');
+  ok(getState().tasks.find(function (x) { return x.id === 't1'; }).goalIds.length === 0, 'deleteGoal unlinks the goal from tasks (task kept)');
+
+  // #3 book tracking moves a 'count' goal
+  upsertBook({ id: 'bk1', title: 'Deep Work' });
+  ok(getState().books.find(function (b) { return b.id === 'bk1'; }).status === 'unread', 'upsertBook defaults to unread');
+  upsertBook({ id: 'bk1', status: 'finished' });
+  ok(getState().books.find(function (b) { return b.id === 'bk1'; }).status === 'finished', 'upsertBook updates status');
+  deleteBook('bk1');
+  ok(!getState().books.find(function (b) { return b.id === 'bk1'; }), 'deleteBook removes the book');
 })();
