@@ -1,5 +1,5 @@
 // sw.js — network-first shell cache so updates flow; never intercept Firebase/gstatic.
-const CACHE = 'lifeplanner-v3';
+const CACHE = 'lifeplanner-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/store.js', 'js/schema.js', 'js/engine.js', 'js/reflection.js',
   'js/dashboard.js', 'js/ai.js', 'js/firebase.js', 'js/capture.js'];

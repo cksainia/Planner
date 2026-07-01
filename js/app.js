@@ -31,6 +31,9 @@ const S = () => store.getState();
 function boot() {
   store.load();
   if (!$('#overlay')) { const o = document.createElement('div'); o.id = 'overlay'; document.body.appendChild(o); }
+  // The overlay lives on <body>, outside #app — delegate its clicks too, else
+  // modal buttons (Save/Delete/Close, focus, frog picker) never fire.
+  $('#overlay').addEventListener('click', onClick);
   const cfgOk = initFirebase();
   store.subscribe(() => { if (booted) render(); });
 
@@ -377,6 +380,8 @@ function viewSettings() {
       <label>Model<input id="aiModel" value="${esc(cfg.model)}"></label>
       <label>API key<input id="aiKey" type="password" value="${esc(cfg.apiKey)}" placeholder="sk-…"></label>
       <button class="ghost" data-action="saveAi">Save AI settings</button>
+      <button class="ghost" data-action="testAi">🧪 Test connection</button>
+      <p id="aiMsg" class="muted small">${cfg.apiKey ? '● Key saved on this device.' : ''}</p>
     </section>`;
 }
 
@@ -556,7 +561,15 @@ async function onClick(e) {
       s.breakMins = parseInt($('#breakCfg').value, 10) || 5;
       store.save(); break;
     }
-    case 'saveAi': { ai.setConfig({ provider: $('#aiProvider').value, model: $('#aiModel').value.trim(), apiKey: $('#aiKey').value.trim() }); msg('#ioMsg', 'AI settings saved.'); break; }
+    case 'saveAi': { ai.setConfig({ provider: $('#aiProvider').value, model: $('#aiModel').value.trim(), apiKey: $('#aiKey').value.trim() }); msg('#aiMsg', 'Saved ✓ — hit Test connection to verify.'); break; }
+    case 'testAi': {
+      ai.setConfig({ provider: $('#aiProvider').value, model: $('#aiModel').value.trim(), apiKey: $('#aiKey').value.trim() });
+      msg('#aiMsg', 'Testing…'); btn.disabled = true;
+      const r = await ai.testConnection();
+      btn.disabled = false;
+      msg('#aiMsg', r.ok ? '✅ Working — model replied.' : '❌ Failed: ' + r.error + (/40[012]/.test(r.error) ? ' (check the key / add billing credits)' : ''));
+      break;
+    }
     case 'signout': await signOutUser(); break;
   }
 }

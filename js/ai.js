@@ -24,6 +24,16 @@ export function setConfig(patch) {
 }
 export function aiEnabled() { return !!getConfig().apiKey; }
 
+// Definitive connectivity check — makes one tiny call and surfaces the real
+// error (401 = bad key, 400/402 = billing/credits) instead of silently falling back.
+export async function testConnection() {
+  if (!aiEnabled()) return { ok: false, error: 'No API key saved.' };
+  try {
+    const out = await callModel('Reply with the single word: OK', 'ping', 16);
+    return { ok: true, sample: (out || '').trim().slice(0, 40) };
+  } catch (e) { return { ok: false, error: e.message || String(e) }; }
+}
+
 // ---------- provider transport ----------
 async function callModel(system, user, maxTokens = 700) {
   const { provider, model, apiKey } = getConfig();
