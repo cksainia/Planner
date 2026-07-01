@@ -9,6 +9,7 @@ import {
   emptyState, normState, normTask, normGoal, normProject, uid,
   SYNC_FIELDS, SCHEMA_VERSION,
 } from './schema.js';
+import { parseQuick } from './capture.js';
 
 const LS_KEY = 'lifeplanner.v1';
 
@@ -125,8 +126,74 @@ export function completeTask(id) {
   t.completedAt = new Date().toISOString();
   // auto-credit a win (reflection loop)
   addWin({ text: 'Completed: ' + t.title, taskId: id, goalId: t.goalIds[0] || null }, { push: false });
+  if (t.recur && t.recur !== 'none') spawnRecurrence(t);
   save();
   return t;
+}
+
+// Recurring tasks: on completion, schedule the next instance (later bucket).
+function spawnRecurrence(t) {
+  const base = t.dueDate || t.deadline || todayStr();
+  const step = { daily: 1, weekly: 7, monthly: 30 }[t.recur];
+  if (!step) return;
+  const next = addDays(base, step);
+  state.tasks.push(normTask({
+    title: t.title, notes: t.notes, goalIds: t.goalIds, projectId: t.projectId,
+    context: t.context, priority: t.priority, effortMins: t.effortMins,
+    important: t.important, urgent: t.urgent, depth: t.depth, recur: t.recur,
+    dueDate: t.dueDate ? next : null, deadline: t.deadline ? next : null, bucket: 'later',
+  }));
+}
+
+// --- methodology mutators (AI-Planner) ---
+export function setTaskBucket(id, bucket) { return patchTask(id, { bucket }); }
+export function toggleFlag(id, flag) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t) return null;
+  t[flag] = !t[flag];
+  save();
+  return t;
+}
+export function setDepth(id, depth) { return patchTask(id, { depth: depth === 'deep' ? 'deep' : 'shallow' }); }
+
+export function setFrog(taskId, date = null) { state.frogByDate[date || todayStr()] = taskId; save(); }
+export function clearFrog(date = null) { delete state.frogByDate[date || todayStr()]; save(); }
+export function getFrogId(date = null) { return state.frogByDate[date || todayStr()] || null; }
+
+export function logPomo(taskId, mins) {
+  state.pomos.push({ id: uid('pm'), date: todayStr(), taskId: taskId || null, mins, at: new Date().toISOString() });
+  save();
+}
+
+// Gentle, no-guilt rollover: promote yesterday's 'tomorrow' tasks to 'today'.
+// Idempotent per day via lastRollover. Safe to call on every load.
+export function doRollover(today = null) {
+  today = today || todayStr();
+  if (state.lastRollover === today) return false;
+  const prev = state.lastRollover;
+  if (prev) {
+    for (const t of state.tasks) {
+      if (t.status === 'done') continue;
+      if (t.bucket === 'tomorrow') t.bucket = 'today';
+    }
+  }
+  state.lastRollover = today;
+  save({ push: !!prev }); // first-ever run just records the date, no cloud churn
+  return true;
+}
+
+// Quick capture: parse a natural-language line into a task (defaults to inbox).
+export function quickAdd(raw) {
+  const fields = parseQuick(raw, { goals: state.goals, projects: state.projects });
+  if (!fields.title) return null;
+  // resolve #project name -> id (create if new)
+  if (fields._projName) {
+    let p = state.projects.find((x) => x.title.toLowerCase() === fields._projName.toLowerCase());
+    if (!p) { p = normProject({ title: fields._projName }); state.projects.push(p); }
+    fields.projectId = p.id;
+    delete fields._projName;
+  }
+  return upsertTask({ bucket: 'inbox', ...fields });
 }
 export function uncompleteTask(id) {
   const t = state.tasks.find((x) => x.id === id);

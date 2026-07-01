@@ -86,6 +86,79 @@
   ok(ro.completedCount === 1 && ro.totalMinutes === 60, 'rollup sums completed minutes in range');
 })();
 
+// ---------------- CAPTURE (quick-add parser) ----------------
+(function () {
+  var f = parseQuick('Draft Q3 deck ! ~ 2h #Q3 @work tomorrow p1', {});
+  ok(f.title === 'Draft Q3 deck', 'parser strips tokens from title');
+  ok(f.important === true, 'parser: ! => important');
+  ok(f.depth === 'deep', 'parser: ~ => deep');
+  ok(f.effortMins === 120, 'parser: 2h => 120 min');
+  ok(f._projName === 'Q3', 'parser: #Q3 => project name');
+  ok(f.context === 'work', 'parser: @work => context');
+  ok(f.bucket === 'tomorrow', 'parser: tomorrow => bucket');
+  ok(f.priority === 'p1', 'parser: p1 => priority');
+  var f2 = parseQuick('Call plumber * 30m', {});
+  ok(f2.urgent === true && f2.effortMins === 30 && f2.title === 'Call plumber', 'parser: * urgent + 30m');
+})();
+
+// ---------------- METHODOLOGY ENGINE ----------------
+(function () {
+  var st = emptyState();
+  st.goals = [normGoal({ id: 'g1', title: 'G', weight: 3 })];
+  var T = '2026-06-30';
+  var imp = normTask({ id: 'imp', title: 'important+urgent', goalIds: ['g1'], important: true, urgent: true, bucket: 'later', effortMins: 30 });
+  var norm = normTask({ id: 'norm', title: 'normal', goalIds: ['g1'], bucket: 'later', effortMins: 30 });
+  st.tasks = [imp, norm];
+  ok(scoreTask(st, imp, { today: T }) > scoreTask(st, norm, { today: T }), 'important+urgent outscores plain');
+  ok(scoreTask(st, imp, { today: T, frogId: 'imp' }) > scoreTask(st, imp, { today: T }), 'frog boost raises score');
+  var q = quadrant(imp); ok(q.key === 'do', 'quadrant: important+urgent => Do First');
+  ok(quadrant(norm).key === 'drop', 'quadrant: neither => Later/Drop');
+
+  // bucket eligibility: inbox & someday excluded from auto-fill unless due
+  st.tasks = [
+    normTask({ id: 'a', title: 'later', goalIds: ['g1'], bucket: 'later', effortMins: 20 }),
+    normTask({ id: 'b', title: 'inbox', goalIds: ['g1'], bucket: 'inbox', effortMins: 20 }),
+    normTask({ id: 'c', title: 'someday', goalIds: ['g1'], bucket: 'someday', effortMins: 20 }),
+    normTask({ id: 'd', title: 'today-bucket', goalIds: ['g1'], bucket: 'today', effortMins: 20 }),
+  ];
+  var r = buildDailyList(st, { today: T, budgetMins: 120 });
+  var ids = r.mustDo.concat(r.suggestions).concat(r.parked).map(function (i) { return i.task.id; });
+  ok(ids.indexOf('a') >= 0, "bucket 'later' auto-fills today");
+  ok(ids.indexOf('b') < 0, "bucket 'inbox' excluded from today");
+  ok(ids.indexOf('c') < 0, "bucket 'someday' excluded from today");
+  ok(r.mustDo.some(function (i) { return i.task.id === 'd'; }), "bucket 'today' is pinned into must-do");
+
+  // planDay produces a schedule with a deep block
+  st.tasks = [normTask({ id: 'x', title: 'deep', goalIds: ['g1'], depth: 'deep', bucket: 'later', effortMins: 50 }),
+    normTask({ id: 'y', title: 'shallow', goalIds: ['g1'], bucket: 'later', effortMins: 30 })];
+  var pd = planDay(st, { today: T });
+  ok(pd.slots.length >= 2 && pd.deepPlanned >= 50, 'planDay schedules a deep block');
+})();
+
+// ---------------- STORE: rollover + recurrence ----------------
+(function () {
+  importState({ goals: [], tasks: [], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  // recurrence: completing a daily task spawns the next instance
+  var t = upsertTask({ id: 'rec', title: 'daily standup', recur: 'daily', dueDate: '2026-06-30', bucket: 'later' });
+  var before = getState().tasks.length;
+  completeTask('rec');
+  ok(getState().tasks.length === before + 1, 'completing a recurring task spawns the next instance');
+  var spawned = getState().tasks.filter(function (x) { return x.id !== 'rec' && x.title === 'daily standup'; })[0];
+  ok(spawned && spawned.dueDate === '2026-07-01', 'recurrence advances the due date by one day');
+
+  // rollover: tomorrow -> today, idempotent
+  getState().lastRollover = '2026-06-29';
+  upsertTask({ id: 'tm', title: 'tmrw task', bucket: 'tomorrow' });
+  var ran = doRollover('2026-06-30');
+  ok(ran === true && getState().tasks.find(function (x) { return x.id === 'tm'; }).bucket === 'today', 'rollover promotes tomorrow->today');
+  ok(doRollover('2026-06-30') === false, 'rollover is idempotent within a day');
+
+  // quickAdd lands in inbox by default and parses flags
+  var qa = quickAdd('Buy milk * @home 15m');
+  ok(qa && qa.bucket === 'inbox' && qa.urgent === true && qa.context === 'home' && qa.effortMins === 15, 'quickAdd captures to inbox with parsed flags');
+})();
+
 // ---------------- DASHBOARD ----------------
 (function () {
   var ds = emptyState();

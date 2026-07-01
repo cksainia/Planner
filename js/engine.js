@@ -92,21 +92,42 @@ export function scoreTask(state, task, opts = {}) {
   s += Math.min(20, unblockCount(state, task.id) * 5); // doing blockers frees others
   s += ageScore(task, today);
   if (task.status === 'in_progress') s += 8;    // finish what you started
+  // Eisenhower flags (AI-Planner), layered on top of p1-p4:
+  if (task.important && task.urgent) s += 40;
+  else if (task.important) s += 25;
+  else if (task.urgent) s += 15;
+  if (task.depth === 'deep') s += 3;            // slight tilt toward high-leverage focus work
+  if (opts.frogId && task.id === opts.frogId) s += 60; // the frog always leads
   if (isBig(task, threshold)) s -= 12;          // nudge toward decomposing, not grinding
   if (task.context === 'work') s += 2;          // light tilt toward income-protecting work
   return Math.round(s);
 }
 
-// Build the day. Returns { mustDo, suggestions, parked, plannedMins, flagged }.
-// opts: { today, budgetMins, bigThreshold, pinnedIds }
+// A task belongs on today's auto-filled plate unless it's still in the inbox,
+// deferred to someday, or explicitly queued for tomorrow — those only appear if
+// due/overdue, pinned, or the frog. 'today' and 'later' (backlog) auto-fill.
+function onTodayPlate(t, today, pinned, frogId) {
+  if (pinned.has(t.id) || t.bucket === 'today' || t.id === frogId) return true;
+  const dl = t.deadline || t.dueDate;
+  if (dl && daysUntil(dl, today) <= 0) return true;
+  return !(t.bucket === 'inbox' || t.bucket === 'someday' || t.bucket === 'tomorrow');
+}
+
+// Build the day. Returns { mustDo, suggestions, parked, plannedMins, flagged, frogId }.
+// opts: { today, budgetMins, bigThreshold, pinnedIds, frogId }
 export function buildDailyList(state, opts = {}) {
   const today = opts.today || isoToday();
   const threshold = opts.bigThreshold ?? (state.settings && state.settings.bigThreshold) ?? 60;
   const budget = opts.budgetMins ?? (state.settings && state.settings.dailyBudgetMins) ?? 120;
+  const frogId = opts.frogId ?? (state.frogByDate && state.frogByDate[today]) ?? null;
+  // pinned = explicit pins + anything the user bucketed as 'today' + the frog
   const pinned = new Set(opts.pinnedIds || []);
+  for (const t of state.tasks) if (t.bucket === 'today' && t.status !== 'done') pinned.add(t.id);
+  if (frogId) pinned.add(frogId);
 
   const eligible = eligibleTasks(state, today)
-    .map((t) => ({ task: t, score: scoreTask(state, t, { today, bigThreshold: threshold }), eff: todayEffort(t, threshold) }));
+    .filter((t) => onTodayPlate(t, today, pinned, frogId))
+    .map((t) => ({ task: t, score: scoreTask(state, t, { today, bigThreshold: threshold, frogId }), eff: todayEffort(t, threshold) }));
 
   // pinned tasks (user already chose them) always sort first, then by score.
   eligible.sort((a, b) => {
@@ -137,9 +158,74 @@ export function buildDailyList(state, opts = {}) {
   const flagged = eligible.filter((i) => isBig(i.task, threshold)).map((i) => i.task);
 
   return {
-    today, budget, plannedMins,
+    today, budget, plannedMins, frogId,
     mustDo, suggestions, parked, flagged,
   };
+}
+
+// Suggest the day's frog (Most Important Task) — the already-chosen one, else the
+// highest-scored important task, else the top candidate. Pure; app persists via setFrog.
+export function suggestFrog(state, opts = {}) {
+  const today = opts.today || isoToday();
+  const chosen = state.frogByDate && state.frogByDate[today];
+  if (chosen) {
+    const t = state.tasks.find((x) => x.id === chosen && x.status !== 'done');
+    if (t) return { task: t, auto: false };
+  }
+  const r = buildDailyList(state, { today, budgetMins: opts.budgetMins });
+  const cands = r.mustDo.concat(r.suggestions).map((i) => i.task);
+  const pick = cands.find((t) => t.important) || cands[0] || null;
+  return { task: pick, auto: true };
+}
+
+// Time-blocked day schedule (Deep Work): front-load a protected deep block up to
+// the daily deep target, then interleave, inserting a break every ~90 minutes.
+// Returns { slots:[{start,end,title,type,taskId?}], deepPlanned, unscheduled }.
+export function planDay(state, opts = {}) {
+  const today = opts.today || isoToday();
+  const s = state.settings || {};
+  const ws = timeToMin(s.workStart || '09:00');
+  const we = timeToMin(s.workEnd || '18:00');
+  const deepTarget = s.deepTargetMins || 120;
+  const threshold = opts.bigThreshold ?? s.bigTaskThreshold ?? 60;
+  const day = buildDailyList(state, { today, budgetMins: 24 * 60 });
+  const cand = day.mustDo.concat(day.suggestions).map((i) => i.task);
+  const deep = cand.filter((t) => t.depth === 'deep');
+  const shallow = cand.filter((t) => t.depth !== 'deep');
+  const slots = [];
+  let cur = ws, deepUsed = 0, sinceBreak = 0;
+  const est = (t) => todayEffort(t, threshold);
+  const place = (t, type) => {
+    const m = est(t);
+    if (cur + m > we) return false;
+    slots.push({ start: cur, end: cur + m, title: t.title, type, taskId: t.id });
+    cur += m; sinceBreak += m;
+    if (sinceBreak >= 90 && cur + 10 <= we) { slots.push({ start: cur, end: cur + 10, title: 'Break', type: 'break' }); cur += 10; sinceBreak = 0; }
+    return true;
+  };
+  let di = 0, si = 0;
+  while (di < deep.length && deepUsed < deepTarget && cur < we) { const t = deep[di++]; if (!place(t, 'deep')) break; deepUsed += est(t); }
+  while ((di < deep.length || si < shallow.length) && cur < we) {
+    const t = si < shallow.length ? shallow[si++] : deep[di++];
+    if (!t || !place(t, t.depth === 'deep' ? 'deep' : 'shallow')) break;
+  }
+  const scheduled = slots.filter((x) => x.taskId).length;
+  return { slots, deepPlanned: deepUsed, deepTarget, unscheduled: Math.max(0, cand.length - scheduled) };
+}
+
+function timeToMin(s) { const p = String(s || '09:00').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
+export function minToTime(m) {
+  m = Math.max(0, Math.min(1439, Math.round(m)));
+  const h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'PM' : 'AM', h12 = h % 12 || 12;
+  return h12 + ':' + String(mm).padStart(2, '0') + ' ' + ap;
+}
+
+// Eisenhower quadrant for a task.
+export function quadrant(t) {
+  if (t.important && t.urgent) return { key: 'do', label: 'Do First' };
+  if (t.important && !t.urgent) return { key: 'schedule', label: 'Schedule' };
+  if (!t.important && t.urgent) return { key: 'delegate', label: 'Delegate' };
+  return { key: 'drop', label: 'Later / Drop' };
 }
 
 // Convenience for the dashboard / nudges: big tasks anywhere that lack a next action.

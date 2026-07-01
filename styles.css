@@ -91,6 +91,66 @@ label input, label select { color: var(--fg); }
 .pinrow { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; color: var(--fg); cursor: pointer; }
 .pinrow.pinned { border-color: var(--accent); background: rgba(91,140,255,.1); }
 
+/* ---- methodology layer (AI-Planner) ---- */
+.quickbar { display: flex; gap: 8px; margin: 4px 0 2px; }
+.quickbar input { flex: 1; }
+.quickbar .ghost { padding: 8px 14px; font-size: 18px; }
+.quickhint { margin: 2px 2px 10px; font-size: 11px; }
+
+.frog { display: flex; gap: 10px; align-items: center; background: linear-gradient(135deg, #23331f, #1b2336); border: 1px solid #3b6b46; border-radius: 14px; padding: 12px; margin: 8px 0; }
+.frog.done { opacity: .6; }
+.frog .fbody { flex: 1; min-width: 0; }
+.frog .flabel { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent2); }
+.frog .ftitle { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.frog.done .ftitle { text-decoration: line-through; }
+.frogbtns { display: flex; flex-direction: column; gap: 5px; }
+
+.deepbar { margin-top: 10px; }
+.deepbar .bar { margin-top: 5px; }
+
+.seg { display: flex; gap: 4px; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.segbtn { background: none; border: none; color: var(--muted); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.segbtn.on { background: var(--accent); color: #fff; }
+
+.focusbtn { background: var(--bg2); border: 1px solid var(--line); color: var(--accent2); border-radius: 9px; width: 34px; cursor: pointer; font-size: 14px; align-self: center; }
+.triage { display: flex; flex-direction: column; gap: 4px; }
+.btn { background: var(--bg2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+.btn.xs { padding: 4px 8px; font-size: 11px; }
+.btn.ghost { color: var(--muted); }
+.chip.flag { border-color: var(--accent2); }
+
+.matrix { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.quad { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-height: 90px; }
+.qhead { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.qtask { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; margin-bottom: 5px; cursor: pointer; }
+
+.brain { width: 100%; min-height: 84px; resize: vertical; margin: 8px 0; }
+.card.due { border-color: var(--accent); }
+.badge { background: var(--accent); color: #fff; font-size: 10px; padding: 1px 7px; border-radius: 20px; vertical-align: middle; }
+
+/* overlay: sheets, editor, pomodoro */
+#overlay:empty { display: none; }
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 40; }
+.sheet { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); width: 100%; max-width: 720px; max-height: 92vh; overflow-y: auto; background: var(--card); border: 1px solid var(--line); border-radius: 18px 18px 0 0; padding: 18px 16px 28px; z-index: 41; }
+.sheetHead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.sheetHead h3 { margin: 0; }
+.iconBtn { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+.fld { font-size: 12px; color: var(--muted); margin: 10px 0 4px; display: block; }
+.in { width: 100%; }
+textarea.in { min-height: 60px; resize: vertical; }
+.toggles { display: flex; gap: 6px; }
+.toggles.wrap { flex-wrap: wrap; }
+.tg { background: var(--bg2); border: 1px solid var(--line); color: var(--fg); border-radius: 9px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+.tg.on { border-color: var(--accent); background: rgba(91,140,255,.15); color: var(--accent); }
+.btnrow { display: flex; gap: 8px; margin-top: 14px; }
+.btnrow .primary { flex: 1; width: auto; }
+
+.sheet.focus { text-align: center; }
+.flabel2 { color: var(--accent2); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+.pomoClock { font-size: 64px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 10px 0; }
+.ftitle2 { color: var(--muted); font-size: 15px; margin-bottom: 14px; }
+.bar.big { height: 12px; }
+
 /* signin */
 .signin { max-width: 360px; margin: 12vh auto; padding: 0 20px; text-align: center; }
 .signin h1 { font-size: 28px; }

@@ -6,12 +6,17 @@ export const CONTEXTS = ['work', 'home', 'outdoor', 'digital', 'family', 'person
 export const STATUSES = ['todo', 'in_progress', 'blocked', 'done'];
 export const PRIORITIES = ['p1', 'p2', 'p3', 'p4']; // p1 highest .. p4 lowest/default
 export const METRICS = ['none', 'weight', 'count', 'taskPercent', 'shipped', 'habit'];
+// Methodology layer (ported from AI-Planner):
+export const BUCKETS = ['inbox', 'today', 'tomorrow', 'later', 'someday']; // GTD-style triage
+export const DEPTHS = ['deep', 'shallow'];                                 // Deep Work
+export const RECUR = ['none', 'daily', 'weekly', 'monthly'];
 
 // Fields that are synced to Firestore (one doc per owner). Anything not listed
 // stays device-local (e.g. AI config, parentMode-style local prefs).
 export const SYNC_FIELDS = [
   'goals', 'projects', 'tasks',
   'weightLog', 'habitsDaily', 'books', 'dailyPlan', 'wins',
+  'pomos', 'frogByDate', 'lastRollover', 'lastWeeklyReview',
   'seedVersion', 'settings',
 ];
 
@@ -31,11 +36,21 @@ export function emptyState() {
     books: [],              // [{id, title, author?, status:'unread'|'reading'|'finished', finishedDate?}]
     dailyPlan: {},          // {'YYYY-MM-DD': {capacityMins, mustDoIds:[], pickedIds:[]}}
     wins: [],               // [{id, date, text, goalId?, taskId?}]
+    pomos: [],              // [{id, date, taskId, mins, at}] completed focus sessions
+    frogByDate: {},         // {'YYYY-MM-DD': taskId}  the day's Most Important Task
+    lastRollover: null,     // 'YYYY-MM-DD' last day the gentle rollover ran
+    lastWeeklyReview: null, // 'YYYY-MM-DD' last weekly review
     seedVersion: 0,         // set to SCHEMA_VERSION once seeded
     settings: {
       dailyBudgetMins: 120, // default discretionary focus budget
       bigTaskThreshold: 60, // tasks over this (mins) are "big" -> need a nextAction
       habits: [],           // [{id, label, schedule:'daily'}]  (defines the G2 checklist)
+      // methodology settings (AI-Planner):
+      workStart: '09:00',
+      workEnd: '18:00',
+      deepTargetMins: 120,  // daily deep-work target
+      pomoMins: 25,
+      breakMins: 5,
     },
   };
 }
@@ -79,6 +94,12 @@ export function normTask(t) {
     context: CONTEXTS.includes(t.context) ? t.context : 'personal',
     notes: t.notes || '',
     nextAction: t.nextAction || '',   // the smallest concrete next step (anti-procrastination)
+    // --- methodology layer (AI-Planner) ---
+    bucket: BUCKETS.includes(t.bucket) ? t.bucket : 'later', // existing tasks -> backlog
+    important: !!t.important,          // Eisenhower
+    urgent: !!t.urgent,                // Eisenhower
+    depth: t.depth === 'deep' ? 'deep' : 'shallow', // Deep Work
+    recur: RECUR.includes(t.recur) ? t.recur : 'none',
     createdAt: t.createdAt || new Date().toISOString(),
     completedAt: t.completedAt || null,
   };
