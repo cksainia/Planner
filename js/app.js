@@ -8,6 +8,7 @@ import { computeStreak, daySummary, mustDoStatus, rollup } from './reflection.js
 import { dashboard, goalProgress, goalTasks, weightSeries, weightStats } from './dashboard.js';
 import * as ai from './ai.js';
 import { initFirebase, isConfigured, onAuth, signInWithGoogle, signOutUser, watchDoc, writeDoc } from './firebase.js';
+import { voiceSupported, startListening, stopListening } from './voice.js';
 
 const PRI_LABEL = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
 const BUCKET_LABEL = { inbox: 'Inbox', today: 'Today', tomorrow: 'Tomorrow', later: 'Later', someday: 'Someday' };
@@ -42,6 +43,7 @@ const ICONS = {
   ring:    { vb: '0 0 18 18', p: '<circle cx="9" cy="9" r="5.5"/>' },
   bookReading: { vb: '0 0 18 18', p: '<path d="M9 4.5c-1.3-1-3-1.4-5-1v10c2 -.4 3.7 0 5 1 1.3-1 3-1.4 5-1v-10c-2-.4-3.7 0-5 1z"/><line x1="9" y1="4.5" x2="9" y2="14.5"/>' },
   bookUnread:  { vb: '0 0 18 18', p: '<rect x="3" y="2.5" width="12" height="13" rx="1.5"/>' },
+  mic:     { vb: '0 0 18 18', p: '<rect x="6.5" y="2" width="5" height="9" rx="2.5"/><path d="M4 8.5a5 5 0 0 0 10 0"/><line x1="9" y1="13.5" x2="9" y2="16"/><line x1="6.5" y1="16" x2="11.5" y2="16"/>' },
 };
 function icon(name, size = 14) {
   const d = ICONS[name]; if (!d) return '';
@@ -74,6 +76,8 @@ let editing = null; // task-editor working state
 let pomo = null;    // pomodoro session
 let syncStatus = 'ok'; // 'ok' | 'error' — surfaced in the header when a cloud write fails
 let selectedTaskId = null; // iPad master-detail selection (not persisted)
+let micTarget = null;      // which input is being dictated into: quick|title|win|brain
+let micBtnEl = null;       // the active mic button element (for state class)
 const WIDE_MQ = '(min-width: 960px)';
 function isWide() { return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(WIDE_MQ).matches; }
 const NAV = [['today', 'Today'], ['tasks', 'Tasks'], ['goals', 'Goals'], ['reflect', 'Reflect'], ['setup', 'Setup']];
@@ -250,7 +254,7 @@ function renderSignIn() {
 function quickBar() {
   return `<div class="quickbar">
     <input id="quickIn" aria-label="Quick add a task" placeholder="Quick add… Draft deck ! ~45m #MVP">
-    <button class="addbtn" data-action="quickAdd" aria-label="Add task">+</button>
+    ${micBtn('quick')}<button class="addbtn" data-action="quickAdd" aria-label="Add task">+</button>
   </div>
   <div class="quickhint">! important · * urgent · ~ deep · #project · @context · 30m/2h</div>`;
 }
@@ -673,7 +677,7 @@ function viewReflect() {
       <h3 class="sech tight">Today's wins</h3>
       <div class="muted small">${md.planned ? `Must-dos: ${md.done}/${md.planned} done. ` : ''}🔥 ${computeStreak(st)}-day streak</div>
       <ul class="wins">${winsHtml}</ul>
-      <div class="row"><input id="winText" placeholder="Log a win (planned or not)…"><select id="winGoal"><option value="">— goal —</option>${st.goals.map((g) => `<option value="${g.id}">${esc(g.title.split(':')[0])}</option>`).join('')}</select><button class="ghost" data-action="addWin">Add</button></div>
+      <div class="row"><input id="winText" placeholder="Log a win (planned or not)…">${micBtn('win')}<select id="winGoal"><option value="">— goal —</option>${st.goals.map((g) => `<option value="${g.id}">${esc(g.title.split(':')[0])}</option>`).join('')}</select><button class="ghost" data-action="addWin">Add</button></div>
       <button class="ghost small" data-action="summarize">Summarize my day</button>
       <p id="daySummary" class="summary"></p>
     </section>`;
@@ -681,7 +685,7 @@ function viewReflect() {
       <h3 class="sech tight">Brain-dump for tomorrow</h3>
       <div class="muted small">One task per line — they land in Tomorrow. You can use ! ~ #proj 30m too.</div>
       <textarea id="brainDump" class="brain" placeholder="Email Priya re: contract !\nGym ~ 45m @personal\nDraft Q3 deck ~ 2h #Q3"></textarea>
-      <button class="ghost" data-action="brainAdd">+ Add to tomorrow</button>
+      <div class="row">${micBtn('brain')}<button class="ghost" data-action="brainAdd">+ Add to tomorrow</button></div>
     </section>`;
   const frogCard = `<section class="card">
       <h3 class="sech tight">🐸 Tomorrow's frog</h3>
@@ -744,16 +748,98 @@ function viewSettings() {
   return `${sync}${data}${engine}${aiCard}`;
 }
 
+// ---------- voice input (Web Speech capture → Claude structuring) ----------
+const MIC_FIELD = { quick: '#quickIn', title: '#eTitle', win: '#winText', brain: '#brainDump' };
+function micBtn(target) {
+  if (!voiceSupported()) return '';
+  return `<button class="mic ${micTarget === target ? 'listening' : ''}" data-action="mic" data-target="${target}" aria-label="Dictate with voice" title="Speak">${icon('mic', 15)}</button>`;
+}
+function endMic() { if (micBtnEl) micBtnEl.classList.remove('listening'); micTarget = null; micBtnEl = null; }
+function toggleMic(target, btn) {
+  if (micTarget === target) { stopListening(); return; }   // tap again = stop
+  if (micTarget) stopListening();
+  micTarget = target; micBtnEl = btn; btn.classList.add('listening');
+  const started = startListening({
+    onPartial: (t) => { const f = $(MIC_FIELD[target]); if (f) f.value = t; },
+    onError: (code) => { endMic(); if (/not-allowed|service-not-allowed/.test(code)) console.warn('[voice] mic permission blocked'); },
+    onFinal: (t) => { onVoiceFinal(target, t); },
+    onEnd: () => { endMic(); },
+  });
+  if (!started) endMic();
+}
+async function onVoiceFinal(target, text) {
+  text = (text || '').trim();
+  if (!text) return;
+  if (target === 'win') { const el = $('#winText'); if (el) el.value = text; return; } // dictation only
+  if (target === 'title') {                                    // structure into the open editor
+    syncEditorInputs();
+    const arr = await ai.parseTasks(text, { multi: false });
+    if (editing) { if (arr && arr[0]) applyParsedToEditor(arr[0]); else editing.title = text; renderEditor(); }
+    return;
+  }
+  const busy = $(MIC_FIELD[target]); if (busy) busy.value = '…structuring…';   // quick / brain
+  const arr = await ai.parseTasks(text, { multi: true });
+  const n = createTasksFromParsed(arr, target);
+  render();
+  const el = $(MIC_FIELD[target]); if (el) el.value = n ? '' : text;   // nothing parsed → keep transcript
+}
+function toFields(p) {
+  const f = { title: p.title };
+  if (p.important) f.important = true;
+  if (p.urgent) f.urgent = true;
+  if (p.deep) f.depth = 'deep';
+  if (p.effortMins) f.effortMins = p.effortMins;
+  if (p.context) f.context = p.context;
+  if (p.priority) f.priority = p.priority;
+  if (p.project) f._projName = p.project;
+  return f;
+}
+function createTasksFromParsed(arr, target) {
+  const defaultBucket = target === 'brain' ? 'tomorrow' : 'inbox';
+  let n = 0;
+  for (const p of (arr || [])) { if (store.addTaskFields(toFields(p), { bucket: p.bucket || defaultBucket })) n++; }
+  return n;
+}
+function applyParsedToEditor(p) {
+  if (!editing) return;
+  if (p.title) editing.title = p.title;
+  editing.important = !!p.important;
+  editing.urgent = !!p.urgent;
+  if (p.deep) editing.depth = 'deep';
+  if (p.effortMins) editing.effortMins = p.effortMins;
+  if (p.context) editing.context = p.context;
+  if (p.priority) editing.priority = p.priority;
+  if (p.bucket) editing.bucket = p.bucket;
+}
+
 // ---------- task editor (overlay) ----------
 function openEditor(id) {
   const st = S();
   const t = id ? st.tasks.find((x) => x.id === id) : null;
   editing = t ? { ...t } : { id: null, title: '', notes: '', goalIds: [], projectId: null, context: 'personal', priority: 'p3', effortMins: 30, dueDate: null, deadline: null, bucket: 'today', important: false, urgent: false, depth: 'shallow', recur: 'none' };
-  const e = editing;
+  renderEditor();
+}
+// Pull the current DOM field values back into `editing` (so a voice re-render doesn't lose typed input).
+function syncEditorInputs() {
+  const e = editing; if (!e) return;
+  const g = (sel) => { const el = $(sel); return el ? el.value : undefined; };
+  if (g('#eTitle') !== undefined) e.title = $('#eTitle').value;
+  if (g('#eNotes') !== undefined) e.notes = $('#eNotes').value;
+  const est = g('#eEst'); if (est !== undefined) { const v = parseInt(est, 10); if (Number.isFinite(v) && v > 0) e.effortMins = v; }
+  if (g('#eDue') !== undefined) e.dueDate = $('#eDue').value || null;
+  if (g('#eDeadline') !== undefined) e.deadline = $('#eDeadline').value || null;
+  if (g('#ePri') !== undefined) e.priority = $('#ePri').value;
+  if (g('#eRecur') !== undefined) e.recur = $('#eRecur').value;
+  const gid = g('#eGoal'); if (gid !== undefined) e.goalIds = gid ? [gid] : [];
+}
+function renderEditor() {
+  const st = S();
+  const e = editing; if (!e) return;
+  const id = e.id;
   const tg = (on, act, val, lbl) => `<button class="tg ${on ? 'on' : ''}" data-ed="${act}" data-v="${val}">${lbl}</button>`;
   overlay().innerHTML = `<div class="scrim" data-action="closeOverlay"></div><div class="sheet">
     <div class="sheetHead"><h3>${id ? 'Edit task' : 'New task'}</h3><button class="iconBtn" data-action="closeOverlay" aria-label="Close">✕</button></div>
-    <label class="fld">Task<input class="in" id="eTitle" value="${esc(e.title)}" placeholder="What needs doing?"></label>
+    <div class="fld">Task</div><div class="microw"><input class="in" id="eTitle" value="${esc(e.title)}" placeholder="What needs doing?">${micBtn('title')}</div>
     <label class="fld">Notes<textarea class="in" id="eNotes" placeholder="Details, links…">${esc(e.notes || '')}</textarea></label>
     <div class="fld">Priority (Eisenhower)</div><div class="toggles">${tg(e.important, 'important', '1', icon('star', 12) + 'Important')}${tg(e.urgent, 'urgent', '1', icon('clockMini', 12) + 'Urgent')}</div>
     <div class="fld">Work type</div><div class="toggles">${tg(e.depth === 'deep', 'depth', 'deep', icon('bolt', 11) + 'Deep')}${tg(e.depth !== 'deep', 'depth', 'shallow', icon('ring', 11) + 'Shallow')}</div>
@@ -951,6 +1037,7 @@ async function onClick(e) {
     case 'cycleBook': { const b = (st.books || []).find((x) => x.id === id); if (b) { const nx = { unread: 'reading', reading: 'finished', finished: 'unread' }[b.status] || 'reading'; store.upsertBook({ id: b.id, status: nx, finishedDate: nx === 'finished' ? store.todayStr() : null }); } break; }
     case 'delBook': store.deleteBook(id); break;
     case 'habit': store.toggleHabit(id); break;
+    case 'mic': toggleMic(btn.dataset.target, btn); break;
     case 'openWeight': view = 'weight'; render(); break;
     case 'wfRange': {
       if (!weightUI) break;

@@ -1,8 +1,8 @@
 // sw.js — network-first shell cache so updates flow; never intercept Firebase/gstatic.
-const CACHE = 'lifeplanner-v8';
+const CACHE = 'lifeplanner-v9';
 const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/store.js', 'js/schema.js', 'js/engine.js', 'js/reflection.js',
-  'js/dashboard.js', 'js/ai.js', 'js/firebase.js', 'js/capture.js'];
+  'js/dashboard.js', 'js/ai.js', 'js/firebase.js', 'js/capture.js', 'js/voice.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

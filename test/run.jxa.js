@@ -30,7 +30,7 @@ globalThis.localStorage = {
 globalThis.console = globalThis.console || { log: function () {}, warn: function () {}, error: function () {} };
 
 var SRC = [
-  'js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'js/reflection.js', 'js/dashboard.js',
+  'js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'js/reflection.js', 'js/dashboard.js', 'js/ai.js',
 ].map(function (f) { return strip(read(f)); }).join('\n');
 
 var CASES = read('test/cases.js');

@@ -24,6 +24,8 @@ dom.window.LP_FIREBASE = { apiKey: 'REPLACE_ME' }; // -> local-only mode, no CDN
 // matchMedia stub so the app's responsive branch is testable; WIDE_MATCH flips it.
 let WIDE_MATCH = false;
 dom.window.matchMedia = (q) => ({ matches: WIDE_MATCH, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+// SpeechRecognition stub so voiceSupported() is true and the mic buttons render.
+dom.window.SpeechRecognition = function () { this.start = function () {}; this.stop = function () {}; };
 
 globalThis.RESULTS = [];
 const ok = (m, c) => RESULTS.push([!!c, m]);
@@ -39,13 +41,13 @@ const fbStubs = `
   function writeDoc(){return Promise.resolve();}
 `;
 
-const libs = ['js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'js/reflection.js', 'js/dashboard.js', 'js/ai.js']
+const libs = ['js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'js/reflection.js', 'js/dashboard.js', 'js/ai.js', 'js/voice.js']
   .map((f) => strip(read(f))).join('\n');
 
 // rebuild the namespace objects app.js expects (it uses `store.x` / `ai.x`)
 const namespaces = `
-  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd };
-  const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay };
+  const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd, addTaskFields };
+  const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay, parseTasks, parseTasksOffline };
 `;
 
 const appCode = strip(read('js/app.js'));
@@ -172,6 +174,22 @@ try {
     RESULTS.push([document.querySelector('#wf-lo').value==='0', 'the "All" preset widens the slider to the full history']);
     var loEl=document.querySelector('#wf-lo'); loEl.value='2'; loEl.dispatchEvent(new dom.window.Event('input'));
     RESULTS.push([!!document.querySelector('.wchart'), 'moving the From slider redraws the chart in place']);
+
+    // 14) Voice input: mic buttons render on all four inputs; structured-create path works
+    store.importState({ goals:[], tasks:[], projects:[], seedVersion:1 }, { markSeed:true });
+    store.applyCloud(null);
+    view='today'; render();
+    RESULTS.push([!!document.querySelector('[data-action=mic][data-target=quick]'), 'mic button renders on quick-add']);
+    view='reflect'; render();
+    RESULTS.push([!!document.querySelector('[data-action=mic][data-target=win]') && !!document.querySelector('[data-action=mic][data-target=brain]'), 'mic buttons render on wins + brain-dump']);
+    view='tasks'; render();
+    document.querySelector('[data-action=newTask]').click();
+    RESULTS.push([!!document.querySelector('#overlay [data-action=mic][data-target=title]'), 'mic button renders in the task editor']);
+    closeOverlay();
+    var madeBefore = store.getState().tasks.length;
+    var made = createTasksFromParsed([{title:'Call surveyor',urgent:true,context:'outdoor',effortMins:15,bucket:'inbox'}], 'quick');
+    RESULTS.push([made===1 && store.getState().tasks.some(function(t){return t.title==='Call surveyor' && t.urgent && t.context==='outdoor' && t.effortMins===15;}), 'voice: a Claude-structured task is created from parsed fields']);
+    RESULTS.push([store.getState().tasks.length===madeBefore+1, 'voice: exactly one task is added']);
   `);
 
   let pass = 0, fail = 0;

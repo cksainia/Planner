@@ -326,3 +326,22 @@
 
   ok(weightStats(series, '2030-01-01', '2030-12-31').count === 0, 'weightStats returns count 0 for an empty window');
 })();
+
+// ---------------- VOICE CAPTURE (store.addTaskFields + ai.parseTasksOffline) ----------------
+(function () {
+  importState({ goals: [], tasks: [], projects: [], seedVersion: 1 }, { markSeed: true });
+  applyCloud(null);
+  // addTaskFields resolves a #project name (creating it) and sets flags/bucket
+  var t = addTaskFields({ title: 'Draft deck', important: true, depth: 'deep', effortMins: 45, _projName: 'MVP' }, { bucket: 'today' });
+  ok(t && t.title === 'Draft deck' && t.important === true && t.depth === 'deep' && t.effortMins === 45 && t.bucket === 'today', 'addTaskFields creates a task with structured fields');
+  ok(getState().projects.some(function (p) { return p.title === 'MVP'; }) && t.projectId, 'addTaskFields resolves + creates the #project');
+  ok(addTaskFields({ title: '' }) === null, 'addTaskFields ignores an empty title');
+
+  // parseTasksOffline: deterministic fallback used when AI is off
+  var one = parseTasksOffline('Call the plumber * 30m @home', false);
+  ok(one.length === 1 && one[0].title === 'Call the plumber' && one[0].urgent === true && one[0].effortMins === 30 && one[0].context === 'home', 'parseTasksOffline structures a single utterance');
+  var many = parseTasksOffline('Email Priya ! and then gym ~ 45m. Book flights tomorrow', true);
+  ok(many.length === 3, 'parseTasksOffline splits multiple spoken tasks');
+  ok(many[0].important === true && many[1].deep === true && many[2].bucket === 'tomorrow', 'parseTasksOffline infers flags per task');
+  ok(parseTasksOffline('', true).length === 0, 'parseTasksOffline returns [] for empty input');
+})();

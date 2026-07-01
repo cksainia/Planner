@@ -190,18 +190,24 @@ export function doRollover(today = null) {
   return true;
 }
 
+// Create a task from already-parsed fields, resolving a #project name -> id (create
+// if new). Shared by quickAdd (shorthand) and voice capture (Claude-structured).
+export function addTaskFields(fields, { bucket = 'inbox' } = {}) {
+  if (!fields || !fields.title) return null;
+  const f = { ...fields };
+  if (f._projName) {
+    let p = state.projects.find((x) => x.title.toLowerCase() === f._projName.toLowerCase());
+    if (!p) { p = normProject({ title: f._projName }); state.projects.push(p); }
+    f.projectId = p.id;
+    delete f._projName;
+  }
+  return upsertTask({ bucket, ...f });
+}
 // Quick capture: parse a natural-language line into a task (defaults to inbox).
 export function quickAdd(raw) {
   const fields = parseQuick(raw, { goals: state.goals, projects: state.projects });
   if (!fields.title) return null;
-  // resolve #project name -> id (create if new)
-  if (fields._projName) {
-    let p = state.projects.find((x) => x.title.toLowerCase() === fields._projName.toLowerCase());
-    if (!p) { p = normProject({ title: fields._projName }); state.projects.push(p); }
-    fields.projectId = p.id;
-    delete fields._projName;
-  }
-  return upsertTask({ bucket: 'inbox', ...fields });
+  return addTaskFields(fields, { bucket: 'inbox' });
 }
 export function uncompleteTask(id) {
   const t = state.tasks.find((x) => x.id === id);

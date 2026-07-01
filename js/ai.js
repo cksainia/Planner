@@ -3,7 +3,10 @@
 // an offline heuristic fallback so the planner is fully usable with no AI.
 //
 // Used for: task decomposition (smallest next action), daily-list suggestions,
-// and end-of-day reflection summaries. See SCHEMA.md for the agentic data contract.
+// end-of-day reflection summaries, and structuring dictated (voice) capture into
+// tasks. See SCHEMA.md for the agentic data contract.
+
+import { parseQuick } from './capture.js';
 
 const AI_KEY = 'lifeplanner.ai.v1';
 
@@ -85,6 +88,51 @@ function extractJSON(text) {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
   if (!m) return null;
   try { return JSON.parse(m[0]); } catch (e) { return null; }
+}
+
+// ---------- voice capture → structured tasks ----------
+const V_CONTEXTS = ['work', 'home', 'outdoor', 'digital', 'family', 'personal'];
+const V_BUCKETS = ['inbox', 'today', 'tomorrow', 'later', 'someday'];
+
+function normParsed(o) {
+  o = o || {};
+  const eff = Number.isFinite(o.effortMins) ? o.effortMins : (o.effortMins != null && Number.isFinite(+o.effortMins) ? +o.effortMins : null);
+  return {
+    title: String(o.title || '').trim().replace(/[.\s]+$/, ''),
+    important: !!o.important, urgent: !!o.urgent, deep: !!o.deep,
+    effortMins: eff && eff > 0 ? eff : null,
+    context: V_CONTEXTS.includes(o.context) ? o.context : null,
+    priority: /^p[1-4]$/.test(o.priority) ? o.priority : null,
+    bucket: V_BUCKETS.includes(o.bucket) ? o.bucket : null,
+    project: o.project ? String(o.project).trim() : null,
+  };
+}
+// Deterministic fallback (no AI): split into utterances, run the shorthand parser.
+export function parseTasksOffline(transcript, multi = false) {
+  const text = String(transcript || '').trim();
+  if (!text) return [];
+  const parts = multi ? text.split(/\n|[.;]|\b(?:and then|then also|then|also|next)\b/i) : [text];
+  return parts.map((s) => s.trim()).filter(Boolean).map((s) => {
+    const f = parseQuick(s);
+    return normParsed({ title: f.title || s, important: f.important, urgent: f.urgent, deep: f.depth === 'deep', effortMins: f.effortMins, context: f.context, priority: f.priority, bucket: f.bucket, project: f._projName });
+  }).filter((t) => t.title);
+}
+// Structure a spoken transcript into task objects via Claude; deterministic fallback.
+export async function parseTasks(transcript, { multi = false } = {}) {
+  const text = String(transcript || '').trim();
+  if (!text) return [];
+  if (aiEnabled()) {
+    try {
+      const sys = 'You convert spoken task capture into structured tasks. Reply ONLY with JSON: an array of task objects. Each object: {"title":string,"important":bool,"urgent":bool,"deep":bool,"effortMins":number|null,"context":"work"|"home"|"outdoor"|"digital"|"family"|"personal"|null,"priority":"p1"|"p2"|"p3"|"p4"|null,"bucket":"inbox"|"today"|"tomorrow"|"later"|"someday"|null,"project":string|null}. '
+        + (multi ? 'The speech may list SEVERAL tasks — split them into separate objects. ' : 'Return exactly one task object. ')
+        + 'Infer flags from natural phrasing ("urgent", "important", "deep focus/deep work"→deep, "by tomorrow"→bucket tomorrow, "about 20 minutes"→effortMins 20, "#project or for the X project"→project). Title is a short imperative with no trailing punctuation. Use null when unsure.';
+      const out = await callModel(sys, text, 600);
+      const j = extractJSON(out);
+      const arr = Array.isArray(j) ? j : (j && j.tasks ? j.tasks : (j && j.title ? [j] : null));
+      if (arr && arr.length) { const mapped = arr.map(normParsed).filter((t) => t.title); if (mapped.length) return mapped; }
+    } catch (e) { /* fall through to offline */ }
+  }
+  return parseTasksOffline(text, multi);
 }
 
 // ---------- features (each with offline fallback) ----------

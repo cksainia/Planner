@@ -70,6 +70,15 @@ label input, label select { color: var(--fg); }
 .addbtn { background: var(--accent); color: var(--bg); border: none; border-radius: 10px; width: 44px; flex-shrink: 0; font-size: 20px; font-weight: 700; cursor: pointer; }
 .quickhint { margin: 4px 2px 12px; font-size: 11px; color: var(--muted); }
 
+/* voice / mic buttons */
+.mic { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 42px; min-height: 40px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--line); color: var(--accent); cursor: pointer; padding: 0; }
+.mic svg { display: block; }
+.mic.listening { color: #fff; background: var(--danger); border-color: var(--danger); animation: micpulse 1.15s ease-in-out infinite; }
+.mic.busy { opacity: .55; }
+@keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,122,.5); } 50% { box-shadow: 0 0 0 6px rgba(255,107,122,0); } }
+.microw { display: flex; gap: 8px; align-items: center; }
+.microw .in { flex: 1; }
+
 /* hero focus card */
 .hero .focustitle { font-size: 16px; font-weight: 600; }
 .hero .focussub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
