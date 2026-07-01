@@ -16,8 +16,12 @@ async function main() {
   const tok = await withingsToken({ grant_type: 'refresh_token', refresh_token: refresh });
   await intRef.set({ refresh_token: tok.refresh_token, userid: tok.userid, updatedAt: new Date().toISOString() }, { merge: true });
 
-  // 2) pull the last 30 days of weight
-  const since = Math.floor(Date.now() / 1000) - 30 * 86400;
+  // 2) pull weight history. Wide window (default ~400 days) so it backfills the
+  //    full trend and never misses gaps between weigh-ins. Upsert is idempotent,
+  //    and the payload stays small (one group per weigh-in). Override with
+  //    WITHINGS_LOOKBACK_DAYS.
+  const lookbackDays = Number(process.env.WITHINGS_LOOKBACK_DAYS) || 400;
+  const since = Math.floor(Date.now() / 1000) - lookbackDays * 86400;
   const byDate = await fetchWeights(tok.access_token, since);
 
   // 3) merge into the planner doc's weightLog (upsert by date, keep manual entries)
