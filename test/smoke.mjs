@@ -47,7 +47,7 @@ const libs = ['js/schema.js', 'js/capture.js', 'js/store.js', 'js/engine.js', 'j
 // rebuild the namespace objects app.js expects (it uses `store.x` / `ai.x`)
 const namespaces = `
   const store = { getState, load, migrate, subscribe, save, setPushFn, isCloudLoaded, pushCloud, applyCloud, cloudInitEmpty, exportJSON, importState, needsSeed, upsertTask, patchTask, completeTask, uncompleteTask, deleteTask, upsertGoal, deleteGoal, addWin, deleteWin, logWeight, toggleHabit, setDailyPlan, upsertBook, deleteBook, todayStr, addDays, addMonths, setTaskBucket, toggleFlag, setDepth, setFrog, clearFrog, getFrogId, logPomo, doRollover, quickAdd, addTaskFields, addSubtask };
-  const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay, parseTasks, parseTasksOffline };
+  const ai = { getConfig, setConfig, aiEnabled, testConnection, decomposeTask, suggestDailyList, summarizeDay, parseTasks, parseTasksOffline, resolveGoalId, snapshotForAI, normOps, assistant };
 `;
 
 const appCode = strip(read('js/app.js'));
@@ -203,6 +203,27 @@ try {
     RESULTS.push([store.getState().tasks.find(function(t){return t.id===kid.id;}).status==='done', 'checking a checklist item completes the sub-task']);
     var si = document.querySelector('#sub-par'); si.value='Draft narrative'; document.querySelector('[data-action=addSub][data-id=par]').click();
     RESULTS.push([store.getState().tasks.some(function(t){return t.parentId==='par' && t.title==='Draft narrative';}), 'the "+ step" input adds a sub-task']);
+
+    // 16) AI assistant chat screen
+    RESULTS.push([!!document.querySelector('[data-nav=ai]'), 'AI tab appears in the nav']);
+    view='ai'; render();
+    RESULTS.push([!!document.querySelector('#chatIn') && !!document.querySelector('[data-action=chatSend]'), 'assistant screen renders the message box and send button']);
+    RESULTS.push([!!document.querySelector('[data-action=mic][data-target=chat]'), 'assistant screen has a voice (mic) button']);
+    RESULTS.push([document.querySelectorAll('[data-action=chatEx]').length >= 3, 'assistant intro offers example prompts']);
+    RESULTS.push([!!document.querySelector('.nudge'), 'assistant warns when no API key is saved']);
+    // the Apply seam: validated ops from the chat go through applyOp -> store
+    var av = ai.normOps([
+      { op:'add_task', title:'Meal prep', goal:'Ship', bucket:'today' },
+      { op:'add_subtask', parentId:'par', title:'Review copy' },
+      { op:'update_task', id:'par', priority:'p1' },
+    ], store.getState());
+    RESULTS.push([av.ops.length===3 && av.skipped===0, 'normOps validates a mixed op batch from the chat']);
+    var applied = av.ops.filter(function(o){ return applyOp(o); }).length;
+    RESULTS.push([applied===3, 'Apply executes every validated op']);
+    var stNow = store.getState();
+    RESULTS.push([stNow.tasks.some(function(t){return t.title==='Meal prep' && t.goalIds[0]==='g1' && t.bucket==='today';}), 'chat add_task lands with the goal linked']);
+    RESULTS.push([stNow.tasks.some(function(t){return t.parentId==='par' && t.title==='Review copy';}), 'chat add_subtask lands as a checklist step']);
+    RESULTS.push([stNow.tasks.find(function(t){return t.id==='par';}).priority==='p1', 'chat update_task patches the task']);
   `);
 
   let pass = 0, fail = 0;

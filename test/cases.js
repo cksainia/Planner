@@ -367,3 +367,57 @@
   deleteTask('par');
   ok(!getState().tasks.find(function (t) { return t.id === 'par' || t.id === kid.id; }), 'deleting a parent cascades to its sub-tasks');
 })();
+
+// ---------------- AI ASSISTANT (snapshot + op validation) ----------------
+(function () {
+  importState({
+    goals: [normGoal({ id: 'g1', title: 'Health: lose 40 lbs', metric: 'weight', weight: 5 }),
+            normGoal({ id: 'g2', title: 'Ship the MVP', metric: 'shipped', weight: 4 })],
+    tasks: [], projects: [], seedVersion: 1,
+  }, { markSeed: true });
+  applyCloud(null);
+  upsertTask({ id: 't1', title: 'Write launch email', goalIds: ['g2'], bucket: 'today', priority: 'p2' });
+  upsertTask({ id: 't2', title: 'Old chore', bucket: 'later' });
+  completeTask('t2');
+  var st = getState();
+
+  // resolveGoalId: id, exact, prefix-before-colon, partial
+  ok(resolveGoalId(st, 'g2') === 'g2', 'resolveGoalId accepts a raw goal id');
+  ok(resolveGoalId(st, 'health') === 'g1', 'resolveGoalId matches the title before the colon');
+  ok(resolveGoalId(st, 'MVP') === 'g2', 'resolveGoalId matches a partial title');
+  ok(resolveGoalId(st, 'no such goal at all') === null, 'resolveGoalId returns null when nothing fits');
+
+  // snapshot: open tasks only (done ones land in recentlyCompleted), goals included
+  var snap = snapshotForAI(st, '2026-07-02');
+  ok(snap.goals.length === 2 && snap.goals[0].id === 'g1', 'snapshotForAI includes the goal directory');
+  ok(snap.openTasks.length === 1 && snap.openTasks[0].id === 't1', 'snapshotForAI lists only open tasks');
+  ok(snap.recentlyCompleted.some(function (t) { return t.id === 't2'; }), 'snapshotForAI keeps recent completions for context');
+
+  // normOps: valid ops normalize, invalid ops are dropped (never guessed)
+  var r = normOps([
+    { op: 'add_task', title: 'Meal prep Sunday', goal: 'health', bucket: 'tomorrow', effortMins: 40, deep: true },
+    { op: 'add_subtask', parentId: 't1', title: 'Draft subject line' },
+    { op: 'add_subtask', parentId: 'missing', title: 'x' },
+    { op: 'update_task', id: 't1', priority: 'p1', goal: 'g1' },
+    { op: 'update_task', id: 'missing', priority: 'p1' },
+    { op: 'complete_task', id: 't1' },
+    { op: 'hack_the_store', id: 't1' },
+    { op: 'add_goal', title: 'Read 12 books', metric: 'count', target: 12, weight: 9 },
+  ], st);
+  ok(r.ops.length === 5 && r.skipped === 3, 'normOps keeps 5 valid ops and drops 3 invalid ones');
+  var add = r.ops[0];
+  ok(add.op === 'add_task' && add.fields.goalIds[0] === 'g1' && add.fields.bucket === 'tomorrow' && add.fields.depth === 'deep', 'add_task resolves the goal and maps deep→depth');
+  ok(add.label.indexOf('Meal prep Sunday') >= 0 && add.label.indexOf('Health') >= 0, 'add_task label names the task and goal');
+  var upd = r.ops[2];
+  ok(upd.op === 'update_task' && upd.fields.priority === 'p1' && upd.fields.goalIds[0] === 'g1' && upd.fields.bucket === undefined, 'update_task keeps only sent fields (no bucket default)');
+  var ag = r.ops[4];
+  ok(ag.op === 'add_goal' && ag.goal.metric === 'count' && ag.goal.weight === 5, 'add_goal validates metric and clamps weight to 1-5');
+
+  // update_task with zero usable fields is skipped, not emitted empty
+  var r2 = normOps([{ op: 'update_task', id: 't1', bucket: 'not-a-bucket' }], st);
+  ok(r2.ops.length === 0 && r2.skipped === 1, 'update_task with no valid fields is skipped');
+
+  // update_goal builds a partial patch (won't clobber unspecified fields)
+  var r3 = normOps([{ op: 'update_goal', id: 'g1', target: 45, metric: 'bogus' }], st);
+  ok(r3.ops.length === 1 && r3.ops[0].patch.target === 45 && r3.ops[0].patch.metric === undefined, 'update_goal keeps valid fields and drops invalid ones');
+})();

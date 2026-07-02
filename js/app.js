@@ -44,6 +44,8 @@ const ICONS = {
   bookReading: { vb: '0 0 18 18', p: '<path d="M9 4.5c-1.3-1-3-1.4-5-1v10c2 -.4 3.7 0 5 1 1.3-1 3-1.4 5-1v-10c-2-.4-3.7 0-5 1z"/><line x1="9" y1="4.5" x2="9" y2="14.5"/>' },
   bookUnread:  { vb: '0 0 18 18', p: '<rect x="3" y="2.5" width="12" height="13" rx="1.5"/>' },
   mic:     { vb: '0 0 18 18', p: '<rect x="6.5" y="2" width="5" height="9" rx="2.5"/><path d="M4 8.5a5 5 0 0 0 10 0"/><line x1="9" y1="13.5" x2="9" y2="16"/><line x1="6.5" y1="16" x2="11.5" y2="16"/>' },
+  ai:      { vb: '0 0 20 20', p: '<path d="M4 3.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6.5L6 16.5v-3H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M10 5.8l.85 2.05L12.9 8.7l-2.05.85L10 11.6l-.85-2.05L7.1 8.7l2.05-.85z" fill="currentColor" stroke="none"/>' },
+  send:    { vb: '0 0 18 18', p: '<path d="M2.5 9L15.5 3l-3.4 12-3.3-4.6z"/><line x1="8.8" y1="10.4" x2="15.5" y2="3"/>' },
 };
 function icon(name, size = 14) {
   const d = ICONS[name]; if (!d) return '';
@@ -101,7 +103,7 @@ let micTarget = null;      // which input is being dictated into: quick|title|wi
 let micBtnEl = null;       // the active mic button element (for state class)
 const WIDE_MQ = '(min-width: 960px)';
 function isWide() { return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(WIDE_MQ).matches; }
-const NAV = [['today', 'Today'], ['tasks', 'Tasks'], ['goals', 'Goals'], ['reflect', 'Reflect'], ['setup', 'Setup']];
+const NAV = [['today', 'Today'], ['tasks', 'Tasks'], ['goals', 'Goals'], ['ai', 'AI'], ['reflect', 'Reflect'], ['setup', 'Setup']];
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = () => $('#app');
@@ -194,7 +196,7 @@ function renderInner() {
   const focusId = samePage && active && active.id && app().contains(active) ? active.id : null;
   const caret = (focusId && 'selectionStart' in active) ? active.selectionStart : null;
 
-  const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, reflect: viewReflect, settings: viewSettings, weight: viewWeight }[view] || viewToday;
+  const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, ai: viewAssistant, reflect: viewReflect, settings: viewSettings, weight: viewWeight }[view] || viewToday;
   if (isWide()) app().innerHTML = wideShell(body);
   else app().innerHTML = `
     <header class="topbar">
@@ -232,7 +234,7 @@ function tab(viewId, iconName, label) {
 // iPad frame: persistent sidebar + titled main pane (replaces the bottom tab bar).
 function wideShell(body) {
   const st = S();
-  const title = { today: 'Today', tasks: 'Tasks', goals: 'Goals', reflect: 'Reflect', settings: 'Setup', weight: 'Weight' }[view] || 'Today';
+  const title = { today: 'Today', tasks: 'Tasks', goals: 'Goals', ai: 'AI Assistant', reflect: 'Reflect', settings: 'Setup', weight: 'Weight' }[view] || 'Today';
   const nav = NAV.map(([id, label]) => {
     const vid = id === 'setup' ? 'settings' : id;
     return `<button class="navbtn ${view === vid ? 'on' : ''}" data-nav="${vid}">${icon(id, 18)}<span>${label}</span></button>`;
@@ -764,7 +766,7 @@ function viewSettings() {
       <p id="engineMsg" class="muted small"></p>
     </section>`;
   const aiCard = `<section class="card"><h3 class="sech tight">AI assist (optional)</h3>
-      <p class="muted small">Task breakdown &amp; daily suggestions. Key stays on this device.</p>
+      <p class="muted small">Powers the AI chat tab, voice capture, task breakdown &amp; daily suggestions. Key stays on this device.</p>
       <label>Provider<select id="aiProvider">${['anthropic', 'openai', 'gemini'].map((p) => `<option ${cfg.provider === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
       <label>Model<input id="aiModel" value="${esc(cfg.model)}"></label>
       <label>API key<input id="aiKey" type="password" value="${esc(cfg.apiKey)}" placeholder="sk-…"></label>
@@ -776,8 +778,85 @@ function viewSettings() {
   return `${sync}${data}${engine}${aiCard}`;
 }
 
+// ---------- AI ASSISTANT (free-form chat over the whole planner) ----------
+// The model sees a snapshot of goals/tasks and proposes structured ops; nothing
+// touches the store until the user taps Apply on the review card.
+let chat = { msgs: [], busy: false }; // session-only; not synced
+
+const CHAT_EXAMPLES = [
+  'Plan my day — what should I focus on?',
+  'Break my frog into small steps',
+  'Add: renew passports by end of July, high priority',
+  'Which of my tasks aren’t linked to any goal? Fix that.',
+];
+
+function viewAssistant() {
+  const hasKey = ai.aiEnabled();
+  const keyWarn = hasKey ? '' : `<div class="nudge">The assistant needs an API key — add one in <a href="#" data-nav="settings" style="color:inherit">Setup → AI assist</a>.</div>`;
+  const intro = chat.msgs.length ? '' : `<section class="card">
+      <h3 class="sech tight">${icon('ai', 15)} Your planner, on tap</h3>
+      <p class="muted small" style="margin:6px 0 10px">I can see all your goals and tasks. Ask me to plan, re-prioritize, break work down, categorize, or add things — I'll propose the exact changes and you approve them with one tap.</p>
+      <div class="exchips">${CHAT_EXAMPLES.map((q) => `<button class="exchip" data-action="chatEx" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    </section>`;
+  const msgs = chat.msgs.map((m, i) => {
+    if (m.role === 'user') return `<div class="cmsg user">${esc(m.text)}</div>`;
+    const ops = (m.ops && m.ops.length) ? `<div class="opsbox">
+        ${m.ops.map((o) => `<div class="opline"><span class="opic">${icon(OP_ICON[o.op] || 'arrow', 13)}</span><span>${esc(o.label)}</span></div>`).join('')}
+        ${m.skipped ? `<div class="muted small" style="margin-top:6px">${m.skipped} suggestion${m.skipped === 1 ? '' : 's'} couldn't be validated and ${m.skipped === 1 ? 'was' : 'were'} dropped.</div>` : ''}
+        ${m.applied ? `<div class="opsdone">✓ ${esc(m.applied)}</div>` : `<button class="primary opsapply" data-action="chatApply" data-i="${i}">Apply ${m.ops.length} change${m.ops.length === 1 ? '' : 's'}</button>`}
+      </div>` : '';
+    return `<div class="cmsg ai">${esc(m.text)}</div>${ops}`;
+  }).join('');
+  const busy = chat.busy ? `<div class="cmsg ai typing"><i></i><i></i><i></i></div>` : '';
+  const clear = chat.msgs.length ? `<div style="text-align:center"><button class="ghost small" data-action="chatClear">Clear conversation</button></div>` : '';
+  return `<div class="chatwrap">${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
+    <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="Ask or tell me anything about your plan…" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>`;
+}
+const OP_ICON = { add_task: 'tasks', add_subtask: 'arrow', update_task: 'pencil', complete_task: 'today', delete_task: 'ring', add_win: 'star', add_goal: 'goals', update_goal: 'goals', set_frog: 'play' };
+
+function scrollChat() {
+  const go = () => { const el = $('#chatEnd'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'end' }); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go); else setTimeout(go, 0);
+}
+async function chatSend(text) {
+  text = (text || '').trim();
+  if (!text || chat.busy) return;
+  const history = chat.msgs.map((m) => ({ role: m.role, text: m.text }));
+  chat.msgs.push({ role: 'user', text });
+  chat.busy = true;
+  render(); scrollChat();
+  const r = await ai.assistant(text, S(), history, store.todayStr());
+  chat.busy = false;
+  chat.msgs.push({ role: 'assistant', text: r.reply, ops: r.ops || [], skipped: r.skipped || 0 });
+  render(); scrollChat();
+}
+// Apply one validated op through the normal store mutators.
+function applyOp(o) {
+  switch (o.op) {
+    case 'add_task': return !!store.addTaskFields({ ...o.fields }, { bucket: o.fields.bucket || 'inbox' });
+    case 'add_subtask': return !!store.addSubtask(o.parentId, o.title);
+    case 'update_task': return !!store.patchTask(o.id, { ...o.fields });
+    case 'complete_task': return !!store.completeTask(o.id);
+    case 'delete_task': store.deleteTask(o.id); return true;
+    case 'add_win': return !!store.addWin({ text: o.text, goalId: o.goalId || null });
+    case 'add_goal': return !!store.upsertGoal({ ...o.goal });
+    case 'update_goal': { const cur = S().goals.find((g) => g.id === o.id); if (!cur) return false; return !!store.upsertGoal({ ...cur, ...o.patch }); }
+    case 'set_frog': store.setFrog(o.id); return true;
+  }
+  return false;
+}
+function applyAssistantOps(i) {
+  const m = chat.msgs[i];
+  if (!m || !m.ops || !m.ops.length || m.applied) return;
+  let n = 0;
+  for (const o of m.ops) { try { if (applyOp(o)) n++; } catch (e) { console.warn('op failed', o, e); } }
+  m.applied = `${n} of ${m.ops.length} applied`;
+  ensureDailyFrog();
+  render(); scrollChat();
+}
+
 // ---------- voice input (Web Speech capture → Claude structuring) ----------
-const MIC_FIELD = { quick: '#quickIn', title: '#eTitle', win: '#winText', brain: '#brainDump' };
+const MIC_FIELD = { quick: '#quickIn', title: '#eTitle', win: '#winText', brain: '#brainDump', chat: '#chatIn' };
 function micBtn(target) {
   if (!voiceSupported()) return '';
   return `<button class="mic ${micTarget === target ? 'listening' : ''}" data-action="mic" data-target="${target}" aria-label="Dictate with voice" title="Speak">${icon('mic', 15)}</button>`;
@@ -799,14 +878,19 @@ async function onVoiceFinal(target, text) {
   text = (text || '').trim();
   if (!text) return;
   if (target === 'win') { const el = $('#winText'); if (el) el.value = text; return; } // dictation only
+  if (target === 'chat') {                                     // dictate straight into the assistant
+    const el = $('#chatIn'); if (el) el.value = '';
+    chatSend(text);
+    return;
+  }
   if (target === 'title') {                                    // structure into the open editor
     syncEditorInputs();
-    const arr = await ai.parseTasks(text, { multi: false });
+    const arr = await ai.parseTasks(text, { multi: false, state: S() });
     if (editing) { if (arr && arr[0]) applyParsedToEditor(arr[0]); else editing.title = text; renderEditor(); }
     return;
   }
   const busy = $(MIC_FIELD[target]); if (busy) busy.value = '…structuring…';   // quick / brain
-  const arr = await ai.parseTasks(text, { multi: true });
+  const arr = await ai.parseTasks(text, { multi: true, state: S() });
   const n = createTasksFromParsed(arr, target);
   render();
   const el = $(MIC_FIELD[target]); if (el) el.value = n ? '' : text;   // nothing parsed → keep transcript
@@ -820,6 +904,7 @@ function toFields(p) {
   if (p.context) f.context = p.context;
   if (p.priority) f.priority = p.priority;
   if (p.project) f._projName = p.project;
+  if (p.goal) { const gid = ai.resolveGoalId(S(), p.goal); if (gid) f.goalIds = [gid]; }
   return f;
 }
 function createTasksFromParsed(arr, target) {
@@ -1016,6 +1101,9 @@ function wire() {
   const q = $('#quickIn'); if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') doQuickAdd(); });
   const bk = $('#bookIn'); if (bk) bk.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const t = bk.value.trim(); if (t) store.upsertBook({ title: t }); } });
   app().querySelectorAll('.subinput').forEach((el) => el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = el.value.trim(); if (v) store.addSubtask(el.id.slice(4), v); } }));
+  const ci = $('#chatIn');
+  if (ci) ci.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const v = ci.value.trim(); ci.value = ''; chatSend(v); } });
+  if (view === 'ai') scrollChat();
   if (view === 'weight') {
     const lo = $('#wf-lo'); if (lo) lo.addEventListener('input', (e) => onWeightSlider('lo', e.target.value));
     const hi = $('#wf-hi'); if (hi) hi.addEventListener('input', (e) => onWeightSlider('hi', e.target.value));
@@ -1068,6 +1156,10 @@ async function onClick(e) {
     case 'habit': store.toggleHabit(id); break;
     case 'addSub': { const el = $('#sub-' + id); const v = (el && el.value || '').trim(); if (v) store.addSubtask(id, v); break; }
     case 'mic': toggleMic(btn.dataset.target, btn); break;
+    case 'chatSend': { const el = $('#chatIn'); const v = (el && el.value || '').trim(); if (el) el.value = ''; chatSend(v); break; }
+    case 'chatEx': chatSend(btn.dataset.q); break;
+    case 'chatApply': applyAssistantOps(parseInt(btn.dataset.i, 10)); break;
+    case 'chatClear': chat = { msgs: [], busy: false }; render(); break;
     case 'openWeight': view = 'weight'; render(); break;
     case 'wfRange': {
       if (!weightUI) break;

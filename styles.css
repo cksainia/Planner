@@ -313,10 +313,35 @@ textarea.in { min-height: 60px; resize: vertical; }
 .detail .btnrow { margin-top: 4px; }
 .detail-empty { color: var(--muted3); font-size: 13px; text-align: center; padding: 40px 12px; }
 
+/* AI assistant chat */
+.chatwrap { display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin: 0 auto 12px; }
+.cmsg { max-width: 88%; padding: 10px 14px; border-radius: 15px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cmsg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+.cmsg.ai { align-self: flex-start; background: var(--surface2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+.cmsg.typing { display: flex; gap: 4px; align-items: center; padding: 13px 16px; }
+.cmsg.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: tybounce 1.2s ease-in-out infinite; }
+.cmsg.typing i:nth-child(2) { animation-delay: .18s; }
+.cmsg.typing i:nth-child(3) { animation-delay: .36s; }
+@keyframes tybounce { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+.opsbox { align-self: stretch; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; }
+.opline { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; line-height: 1.45; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.opline:last-of-type { border-bottom: none; }
+.opic { color: var(--accent); flex-shrink: 0; margin-top: 2px; display: inline-flex; }
+.opsapply { width: 100%; margin-top: 10px; }
+.opsdone { color: var(--good); font-size: 13px; font-weight: 600; margin-top: 8px; }
+.exchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.exchip { background: var(--surface2); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 7px 13px; font-size: 12.5px; cursor: pointer; text-align: left; }
+.exchip:hover { border-color: var(--accent); }
+.chatbar { display: flex; gap: 8px; align-items: flex-end; max-width: 760px; margin: 0 auto; position: sticky; bottom: calc(64px + env(safe-area-inset-bottom, 0px)); background: var(--bg); padding: 8px 0 4px; }
+.chatbar textarea { flex: 1; resize: none; min-height: 40px; max-height: 120px; background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; color: var(--text); padding: 10px 12px; font: inherit; font-size: 14px; }
+.chatbar textarea:focus { outline: none; border-color: var(--accent); }
+.chatbar .addbtn { align-self: flex-end; }
+
 @media (max-width: 959px) {
   .frame { display: block; }
   .sidebar { display: none; }
 }
 @media (min-width: 960px) {
   #app { max-width: none; padding-bottom: 0; }
+  .chatbar { bottom: 12px; }
 }
