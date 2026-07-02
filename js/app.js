@@ -3,7 +3,7 @@
 // capture, Pomodoro, Eisenhower matrix, inbox/buckets, reviews).
 
 import * as store from './store.js';
-import { buildDailyList, scoreTask, eligibleTasks, isBig, todayEffort, suggestFrog, planDay, quadrant, minToTime } from './engine.js';
+import { buildDailyList, scoreTask, eligibleTasks, isBig, todayEffort, suggestFrog, planDay, quadrant, minToTime, wouldCycle, blockersOf } from './engine.js';
 import { computeStreak, daySummary, mustDoStatus, rollup } from './reflection.js';
 import { dashboard, goalProgress, goalTasks, weightSeries, weightStats } from './dashboard.js';
 import * as ai from './ai.js';
@@ -46,6 +46,7 @@ const ICONS = {
   mic:     { vb: '0 0 18 18', p: '<rect x="6.5" y="2" width="5" height="9" rx="2.5"/><path d="M4 8.5a5 5 0 0 0 10 0"/><line x1="9" y1="13.5" x2="9" y2="16"/><line x1="6.5" y1="16" x2="11.5" y2="16"/>' },
   ai:      { vb: '0 0 20 20', p: '<path d="M4 3.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6.5L6 16.5v-3H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M10 5.8l.85 2.05L12.9 8.7l-2.05.85L10 11.6l-.85-2.05L7.1 8.7l2.05-.85z" fill="currentColor" stroke="none"/>' },
   send:    { vb: '0 0 18 18', p: '<path d="M2.5 9L15.5 3l-3.4 12-3.3-4.6z"/><line x1="8.8" y1="10.4" x2="15.5" y2="3"/>' },
+  lock:    { vb: '0 0 18 18', p: '<rect x="4" y="8" width="10" height="7.5" rx="1.5"/><path d="M6.5 8V5.5a2.5 2.5 0 0 1 5 0V8"/>' },
 };
 function icon(name, size = 14) {
   const d = ICONS[name]; if (!d) return '';
@@ -443,10 +444,30 @@ function detailPanel() {
     <div class="toggles ctxgrid">${ctxBtns}</div>
     <label class="fld">When</label>
     <div class="toggles wrap">${bkBtns}</div>
+    <label class="fld">Blocked by</label>
+    ${depControls(st, t.id, t.deps || [], 'det')}
     <label class="fld">Steps</label>
     ${subtaskChecklist(st, t, true)}
     <div class="btnrow"><button class="focuspill" style="flex:1;justify-content:center" data-action="focus" data-id="${t.id}">${icon('play', 11)}Focus</button><button class="danger" data-action="deleteTask" data-id="${t.id}">Delete</button></div>
   </div>`;
+}
+
+function shortT(s, n = 22) { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+// "Blocked by" chips + add-select, shared by the overlay editor (mode 'ed',
+// edits the in-memory `editing` object) and the iPad detail panel (mode 'det',
+// patches the store live). Candidates exclude self, sub-tasks, and anything
+// that would create a circular chain.
+function depControls(st, taskId, deps, mode) {
+  const chips = (deps || []).map((d) => {
+    const b = st.tasks.find((x) => x.id === d);
+    if (!b) return '';
+    return `<span class="depchip ${b.status === 'done' ? 'done' : ''}" title="${b.status === 'done' ? 'Done — no longer blocking' : 'Must finish first'}">${icon('lock', 10)}${esc(shortT(b.title))}<button class="depx" data-action="${mode}RmDep" data-id="${taskId || ''}" data-dep="${d}" aria-label="Remove blocker">×</button></span>`;
+  }).join('');
+  const cands = st.tasks.filter((c) =>
+    c.status !== 'done' && c.id !== taskId && !isChildOf(st, c)
+    && !(deps || []).includes(c.id) && !(taskId && wouldCycle(st, taskId, c.id)));
+  const sel = `<select class="in depadd" id="${mode}DepAdd" data-id="${taskId || ''}"><option value="">+ Add a blocker (must finish first)…</option>${cands.map((c) => `<option value="${c.id}">${esc(shortT(c.title, 48))}</option>`).join('')}</select>`;
+  return `<div class="depwrap">${chips ? `<div class="depchips">${chips}</div>` : ''}${sel}</div>`;
 }
 
 function taskRow(t, { showEffort = false, compact = false, focus = false, openAction = 'edit', selected = false, board = false } = {}) {
@@ -467,6 +488,8 @@ function taskRow(t, { showEffort = false, compact = false, focus = false, openAc
   if (t.important) meta.push(`<span class="flagi imp" title="Important">${icon('star', 12)}</span>`);
   if (t.urgent) meta.push(`<span class="flagi urg" title="Urgent">${icon('urgent', 12)}</span>`);
   if (t.recur && t.recur !== 'none') meta.push(`<span class="flagi rec" title="Repeats">${icon('recur', 12)}</span>`);
+  const blockers = blockersOf(st, t);
+  if (blockers.length) meta.push(`<span class="mi blockedchip" title="Waits on: ${esc(blockers.map((b) => b.title).join(', '))}">${icon('lock', 11)}${esc(shortT(blockers[0].title, 18))}${blockers.length > 1 ? ' +' + (blockers.length - 1) : ''}</span>`);
   if (goal) meta.push(`<span class="goaltag" style="--goalc:${gc}">${esc(goal.title.split(':')[0].split('&')[0].trim())}</span>`);
 
   return `<div class="task ${t.status === 'done' ? 'done' : ''} ${selected ? 'sel' : ''}" data-id="${t.id}" style="--goalc:${gc}">
@@ -830,12 +853,29 @@ async function chatSend(text) {
   chat.msgs.push({ role: 'assistant', text: r.reply, ops: r.ops || [], skipped: r.skipped || 0 });
   render(); scrollChat();
 }
-// Apply one validated op through the normal store mutators.
-function applyOp(o) {
+// Apply one validated op through the normal store mutators. `ctx.created` maps
+// lowercased titles of tasks created earlier in this batch → their new ids, so
+// deps can reference same-batch tasks by title (see normOps).
+function resolveDeps(deps, forId, ctx) {
+  return (deps || [])
+    .map((d) => S().tasks.some((t) => t.id === d) ? d : ((ctx && ctx.created) || {})[String(d).trim().toLowerCase()])
+    .filter((d) => d && d !== forId && !(forId && wouldCycle(S(), forId, d)));
+}
+function applyOp(o, ctx) {
   switch (o.op) {
-    case 'add_task': return !!store.addTaskFields({ ...o.fields }, { bucket: o.fields.bucket || 'inbox' });
+    case 'add_task': {
+      const fields = { ...o.fields };
+      if (fields.deps) fields.deps = resolveDeps(fields.deps, null, ctx);
+      const t = store.addTaskFields(fields, { bucket: o.fields.bucket || 'inbox' });
+      if (t && ctx && ctx.created) ctx.created[t.title.trim().toLowerCase()] = t.id;
+      return !!t;
+    }
     case 'add_subtask': return !!store.addSubtask(o.parentId, o.title);
-    case 'update_task': return !!store.patchTask(o.id, { ...o.fields });
+    case 'update_task': {
+      const fields = { ...o.fields };
+      if (fields.deps) fields.deps = resolveDeps(fields.deps, o.id, ctx);
+      return !!store.patchTask(o.id, fields);
+    }
     case 'complete_task': return !!store.completeTask(o.id);
     case 'delete_task': store.deleteTask(o.id); return true;
     case 'add_win': return !!store.addWin({ text: o.text, goalId: o.goalId || null });
@@ -849,7 +889,8 @@ function applyAssistantOps(i) {
   const m = chat.msgs[i];
   if (!m || !m.ops || !m.ops.length || m.applied) return;
   let n = 0;
-  for (const o of m.ops) { try { if (applyOp(o)) n++; } catch (e) { console.warn('op failed', o, e); } }
+  const ctx = { created: {} };
+  for (const o of m.ops) { try { if (applyOp(o, ctx)) n++; } catch (e) { console.warn('op failed', o, e); } }
   m.applied = `${n} of ${m.ops.length} applied`;
   ensureDailyFrog();
   render(); scrollChat();
@@ -929,7 +970,7 @@ function applyParsedToEditor(p) {
 function openEditor(id) {
   const st = S();
   const t = id ? st.tasks.find((x) => x.id === id) : null;
-  editing = t ? { ...t } : { id: null, title: '', notes: '', goalIds: [], projectId: null, context: 'personal', priority: 'p3', effortMins: 30, dueDate: null, deadline: null, bucket: 'today', important: false, urgent: false, depth: 'shallow', recur: 'none' };
+  editing = t ? { ...t } : { id: null, title: '', notes: '', goalIds: [], projectId: null, context: 'personal', priority: 'p3', effortMins: 30, dueDate: null, deadline: null, bucket: 'today', important: false, urgent: false, depth: 'shallow', recur: 'none', deps: [] };
   renderEditor();
 }
 // Pull the current DOM field values back into `editing` (so a voice re-render doesn't lose typed input).
@@ -961,10 +1002,19 @@ function renderEditor() {
     <div class="row"><label class="fld" style="flex:1">Estimate (min)<input class="in" type="number" min="1" step="5" id="eEst" value="${e.effortMins || ''}"></label><label class="fld" style="flex:1">Due (soft)<input class="in" type="date" id="eDue" value="${e.dueDate || ''}"></label></div>
     <label class="fld">Deadline (immovable)<input class="in" type="date" id="eDeadline" value="${e.deadline || ''}"></label>
     <label class="fld">Goal<select class="in" id="eGoal"><option value="">— no goal —</option>${st.goals.map((g) => `<option value="${g.id}" ${(e.goalIds || [])[0] === g.id ? 'selected' : ''}>${esc(g.title.split(':')[0])}</option>`).join('')}</select></label>
+    <div class="fld">Blocked by</div>
+    ${depControls(st, e.id, e.deps || [], 'ed')}
     <div class="row"><label class="fld" style="flex:1">Priority<select class="in" id="ePri">${['p1', 'p2', 'p3', 'p4'].map((p) => `<option ${e.priority === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
       <label class="fld" style="flex:1">Repeat<select class="in" id="eRecur">${['none', 'daily', 'weekly', 'monthly'].map((r) => `<option ${e.recur === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label></div>
     <div class="btnrow"><button class="primary" data-action="saveTask">${id ? 'Save' : 'Add task'}</button>${id ? `<button class="ghost" data-action="deleteTask" data-id="${id}" style="color:var(--p1)">Delete</button>` : ''}</div>
   </div>`;
+  const eDep = overlay().querySelector('#edDepAdd');
+  if (eDep) eDep.addEventListener('change', () => {
+    if (!eDep.value) return;
+    syncEditorInputs(); // keep typed title/notes across the re-render
+    editing.deps = [...(editing.deps || []), eDep.value];
+    renderEditor();
+  });
   overlay().querySelectorAll('[data-ed]').forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.ed, v = b.dataset.v;
     if (k === 'important' || k === 'urgent') editing[k] = !editing[k];
@@ -1103,6 +1153,13 @@ function wire() {
   app().querySelectorAll('.subinput').forEach((el) => el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = el.value.trim(); if (v) store.addSubtask(el.id.slice(4), v); } }));
   const ci = $('#chatIn');
   if (ci) ci.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const v = ci.value.trim(); ci.value = ''; chatSend(v); } });
+  const dDep = $('#detDepAdd');
+  if (dDep) dDep.addEventListener('change', () => {
+    const tid = dDep.dataset.id, dep = dDep.value;
+    if (!tid || !dep) return;
+    const t = S().tasks.find((x) => x.id === tid);
+    if (t && !wouldCycle(S(), tid, dep)) store.patchTask(tid, { deps: [...(t.deps || []), dep] });
+  });
   if (view === 'ai') scrollChat();
   if (view === 'weight') {
     const lo = $('#wf-lo'); if (lo) lo.addEventListener('input', (e) => onWeightSlider('lo', e.target.value));
@@ -1138,6 +1195,8 @@ async function onClick(e) {
     case 'detShallow': store.setDepth(id, 'shallow'); break;
     case 'detCtx': store.patchTask(id, { context: btn.dataset.c }); break;
     case 'detBucket': store.setTaskBucket(id, btn.dataset.b); break;
+    case 'detRmDep': { const t = st.tasks.find((x) => x.id === id); if (t) store.patchTask(id, { deps: (t.deps || []).filter((d) => d !== btn.dataset.dep) }); break; }
+    case 'edRmDep': if (editing) { syncEditorInputs(); editing.deps = (editing.deps || []).filter((d) => d !== btn.dataset.dep); renderEditor(); } break;
     case 'closeOverlay': closeOverlay(); break;
     case 'toggle': { const t = st.tasks.find((x) => x.id === id); if (t) (t.status === 'done' ? store.uncompleteTask(id) : store.completeTask(id)); break; }
     case 'bucket': store.setTaskBucket(id, btn.dataset.b); break;

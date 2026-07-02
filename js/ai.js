@@ -7,6 +7,7 @@
 // tasks. See SCHEMA.md for the agentic data contract.
 
 import { parseQuick } from './capture.js';
+import { wouldCycle } from './engine.js';
 
 const AI_KEY = 'lifeplanner.ai.v1';
 
@@ -228,6 +229,7 @@ export function snapshotForAI(state, today = null) {
     if (t.dueDate) o.dueDate = t.dueDate;
     if (t.deadline) o.deadline = t.deadline;
     if (t.recur && t.recur !== 'none') o.recur = t.recur;
+    if ((t.deps || []).length) o.deps = t.deps;
     if (t.nextAction) o.nextAction = t.nextAction;
     if (t.notes) o.notes = String(t.notes).slice(0, 140);
     return o;
@@ -254,7 +256,9 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Shared field normalizer for add_task / update_task ops. `partial` (updates)
 // only keeps keys the model actually sent; adds fill sensible fields.
-function opTaskFields(o, state, partial) {
+// `pending` = lowercased titles of tasks created earlier in the same op batch —
+// deps may reference those by title (their ids don't exist until Apply).
+function opTaskFields(o, state, partial, pending) {
   const f = {};
   const has = (k) => o[k] !== undefined && o[k] !== null;
   if (has('title') && String(o.title).trim()) f.title = String(o.title).trim();
@@ -271,6 +275,11 @@ function opTaskFields(o, state, partial) {
   if (has('notes')) f.notes = String(o.notes);
   if (has('nextAction')) f.nextAction = String(o.nextAction);
   if (has('goal')) { const gid = resolveGoalId(state, o.goal); if (gid) f.goalIds = [gid]; }
+  if (o.deps !== undefined && Array.isArray(o.deps)) {
+    f.deps = o.deps.map((d) => String(d)).filter((d) =>
+      (state.tasks || []).some((t) => t.id === d)
+      || (pending && pending.has(d.trim().toLowerCase())));
+  }
   // project rename only on create — patchTask has no #project resolver
   if (!partial && has('project') && String(o.project).trim()) f._projName = String(o.project).trim();
   if (!partial && !f.bucket) f.bucket = 'inbox';
@@ -291,16 +300,20 @@ function taskTitle(state, id) {
 export function normOps(raw, state) {
   const out = [];
   let skipped = 0;
+  const pending = new Set(); // titles of add_task ops earlier in this batch
+  const depName = (d) => taskTitle(state, d) || d; // id → title; batch-title markers pass through
   for (const o of (Array.isArray(raw) ? raw : [])) {
     if (!o || !OP_NAMES.includes(o.op)) { skipped++; continue; }
     if (o.op === 'add_task') {
-      const fields = opTaskFields(o, state, false);
+      const fields = opTaskFields(o, state, false, pending);
       if (!fields.title) { skipped++; continue; }
+      pending.add(fields.title.toLowerCase());
       const bits = [];
       if (fields.goalIds) bits.push(goalShort(state, fields.goalIds[0]));
       bits.push(fields.bucket);
       if (fields.priority) bits.push(fields.priority);
       if (fields.effortMins) bits.push(fields.effortMins + 'm');
+      if (fields.deps && fields.deps.length) bits.push('after: ' + fields.deps.map(depName).join(', '));
       out.push({ op: 'add_task', fields, label: `Add task “${fields.title}” (${bits.filter(Boolean).join(' · ')})` });
     } else if (o.op === 'add_subtask') {
       let pid = o.parentId && (state.tasks || []).some((t) => t.id === o.parentId) ? o.parentId : null;
@@ -310,10 +323,12 @@ export function normOps(raw, state) {
       out.push({ op: 'add_subtask', parentId: pid, title, label: `Add step to “${taskTitle(state, pid)}”: ${title}` });
     } else if (o.op === 'update_task') {
       if (!o.id || !(state.tasks || []).some((t) => t.id === o.id)) { skipped++; continue; }
-      const fields = opTaskFields(o, state, true);
+      const fields = opTaskFields(o, state, true, pending);
+      // no self-deps or circular chains (batch-title markers re-checked at Apply)
+      if (fields.deps) fields.deps = fields.deps.filter((d) => d !== o.id && ((state.tasks || []).some((t) => t.id === d) ? !wouldCycle(state, o.id, d) : true));
       const keys = Object.keys(fields);
       if (!keys.length) { skipped++; continue; }
-      const disp = keys.map((k) => k === 'goalIds' ? `goal → ${goalShort(state, fields.goalIds[0])}` : k === '_projName' ? `project → ${fields[k]}` : `${k} → ${fields[k]}`).join(', ');
+      const disp = keys.map((k) => k === 'goalIds' ? `goal → ${goalShort(state, fields.goalIds[0])}` : k === '_projName' ? `project → ${fields[k]}` : k === 'deps' ? `blocked by → ${fields.deps.map(depName).join(', ') || 'none'}` : `${k} → ${fields[k]}`).join(', ');
       out.push({ op: 'update_task', id: o.id, fields, label: `Update “${taskTitle(state, o.id)}”: ${disp}` });
     } else if (o.op === 'complete_task' || o.op === 'delete_task' || o.op === 'set_frog') {
       if (!o.id || !(state.tasks || []).some((t) => t.id === o.id)) { skipped++; continue; }
@@ -354,7 +369,7 @@ export function normOps(raw, state) {
 const ASSIST_SYS = 'You are the assistant inside "Life Planner", the user\'s personal goal & task planner. You receive their full planner state as JSON plus a request. Reply ONLY with JSON: {"reply": string, "ops": array}. '
   + '"reply" is a short, warm, direct answer in plain text (no markdown, under 90 words). "ops" is the list of concrete changes to make (empty array if the request is just a question). The app shows the ops to the user for one-tap approval, then applies them. '
   + 'Allowed ops: '
-  + '{"op":"add_task","title":str,"goal":goalId|null,"project":str|null,"bucket":"inbox|today|tomorrow|later|someday","priority":"p1|p2|p3|p4","effortMins":num,"context":"work|home|outdoor|digital|family|personal","important":bool,"urgent":bool,"deep":bool,"dueDate":"YYYY-MM-DD"|null,"deadline":"YYYY-MM-DD"|null,"recur":"none|daily|weekly|monthly","notes":str|null} · '
+  + '{"op":"add_task","title":str,"goal":goalId|null,"project":str|null,"bucket":"inbox|today|tomorrow|later|someday","priority":"p1|p2|p3|p4","effortMins":num,"context":"work|home|outdoor|digital|family|personal","important":bool,"urgent":bool,"deep":bool,"dueDate":"YYYY-MM-DD"|null,"deadline":"YYYY-MM-DD"|null,"recur":"none|daily|weekly|monthly","deps":[taskId…]|null,"notes":str|null} · '
   + '{"op":"add_subtask","parentId":taskId,"title":str} (a concrete checklist step under an existing task) · '
   + '{"op":"update_task","id":taskId, …any add_task fields to change…} · '
   + '{"op":"complete_task","id":taskId} · {"op":"delete_task","id":taskId} · '
@@ -362,7 +377,9 @@ const ASSIST_SYS = 'You are the assistant inside "Life Planner", the user\'s per
   + '{"op":"add_goal","title":str,"metric":"taskPercent|weight|count|shipped|habit|none","target":num|null,"weight":1-5} · '
   + '{"op":"update_goal","id":goalId,"title"?,"metric"?,"target"?,"baseline"?,"weight"?} · '
   + '{"op":"set_frog","id":taskId} (today\'s single most important task). '
-  + 'Rules: use ids EXACTLY as they appear in the state. ALWAYS set "goal" on new tasks to the best-fitting goal id (null only if truly unrelated). When asked to break work down, add 3-6 add_subtask ops with short concrete steps. When categorizing or planning, prefer update_task over creating duplicates. If the request is ambiguous, ask one clarifying question in "reply" with empty ops. Never invent tasks the user didn\'t imply.';
+  + 'Rules: use ids EXACTLY as they appear in the state. ALWAYS set "goal" on new tasks to the best-fitting goal id (null only if truly unrelated). When asked to break work down, add 3-6 add_subtask ops with short concrete steps. When categorizing or planning, prefer update_task over creating duplicates. '
+  + '"deps" sequences tasks: a task with deps stays blocked (off the daily plan) until every dep is done. Use it whenever the user implies order ("after", "once X is done", "then"). Entries are task ids; to depend on a task you are creating earlier in this SAME ops list, use that task\'s exact title string instead (it has no id yet). Sub-tasks (add_subtask) don\'t need deps. '
+  + 'If the request is ambiguous, ask one clarifying question in "reply" with empty ops. Never invent tasks the user didn\'t imply.';
 
 // One assistant turn. `history` = [{role:'user'|'assistant', text}] (recent turns).
 export async function assistant(userText, state, history = [], today = null) {

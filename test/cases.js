@@ -421,3 +421,47 @@
   var r3 = normOps([{ op: 'update_goal', id: 'g1', target: 45, metric: 'bogus' }], st);
   ok(r3.ops.length === 1 && r3.ops[0].patch.target === 45 && r3.ops[0].patch.metric === undefined, 'update_goal keeps valid fields and drops invalid ones');
 })();
+
+// ---------------- TASK DEPENDENCIES ----------------
+(function () {
+  importState({
+    goals: [normGoal({ id: 'g1', title: 'Ship', weight: 4 })],
+    tasks: [], projects: [], seedVersion: 1,
+  }, { markSeed: true });
+  applyCloud(null);
+  upsertTask({ id: 'd1', title: 'Design the API', goalIds: ['g1'], bucket: 'today' });
+  upsertTask({ id: 'd2', title: 'Build the API', goalIds: ['g1'], bucket: 'today', deps: ['d1'] });
+  upsertTask({ id: 'd3', title: 'Announce launch', goalIds: ['g1'], bucket: 'today', deps: ['d2'] });
+  var st = getState();
+
+  // cycle detection: self, direct, transitive; unrelated is fine
+  ok(wouldCycle(st, 'd1', 'd1') === true, 'wouldCycle: a task cannot depend on itself');
+  ok(wouldCycle(st, 'd1', 'd2') === true, 'wouldCycle blocks a direct A→B→A loop');
+  ok(wouldCycle(st, 'd1', 'd3') === true, 'wouldCycle blocks a transitive A→B→C→A loop');
+  ok(wouldCycle(st, 'd3', 'd1') === false, 'wouldCycle allows a legal forward dependency');
+
+  // blockersOf lists unmet blockers; completion frees the chain
+  ok(blockersOf(st, st.tasks.find(function (t) { return t.id === 'd2'; }))[0].id === 'd1', 'blockersOf names the unmet blocker');
+  var elig = eligibleTasks(st, '2026-07-02').map(function (t) { return t.id; });
+  ok(elig.indexOf('d2') < 0 && elig.indexOf('d3') < 0 && elig.indexOf('d1') >= 0, 'only the chain head is eligible');
+  completeTask('d1');
+  elig = eligibleTasks(getState(), '2026-07-02').map(function (t) { return t.id; });
+  ok(elig.indexOf('d2') >= 0 && elig.indexOf('d3') < 0, 'completing the blocker unlocks exactly the next task');
+  ok(blockersOf(getState(), getState().tasks.find(function (t) { return t.id === 'd2'; })).length === 0, 'blockersOf ignores completed blockers');
+
+  // AI ops: deps validated, cycles dropped, same-batch title references kept
+  var r = normOps([
+    { op: 'add_task', title: 'Book flights', goal: 'g1', bucket: 'later' },
+    { op: 'add_task', title: 'Book hotel', goal: 'g1', bucket: 'later', deps: ['Book flights', 'ghost-id'] },
+    { op: 'update_task', id: 'd2', deps: ['d3', 'd1'] },
+  ], getState());
+  ok(r.ops.length === 3 && r.skipped === 0, 'normOps accepts the dep batch');
+  ok(r.ops[1].fields.deps.length === 1 && r.ops[1].fields.deps[0] === 'Book flights', 'same-batch title dep is kept; unknown id dropped');
+  ok(r.ops[1].label.indexOf('after: Book flights') >= 0, 'add_task label shows the sequencing');
+  ok(r.ops[2].fields.deps.length === 1 && r.ops[2].fields.deps[0] === 'd1', 'update_task drops the dep that would create a cycle (d2→d3→d2)');
+
+  // snapshot exposes deps so the model can reason about chains
+  var snap = snapshotForAI(getState(), '2026-07-02');
+  var s3 = snap.openTasks.filter(function (t) { return t.id === 'd3'; })[0];
+  ok(s3 && s3.deps && s3.deps[0] === 'd2', 'snapshotForAI includes dependency links');
+})();

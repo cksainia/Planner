@@ -313,6 +313,16 @@ textarea.in { min-height: 60px; resize: vertical; }
 .detail .btnrow { margin-top: 4px; }
 .detail-empty { color: var(--muted3); font-size: 13px; text-align: center; padding: 40px 12px; }
 
+/* task dependencies (blocked-by) */
+.mi.blockedchip { color: var(--warn); }
+.depwrap { margin: 2px 0 12px; }
+.depchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.depchip { display: inline-flex; align-items: center; gap: 5px; background: var(--surface2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12px; color: var(--warn); }
+.depchip.done { color: var(--muted); text-decoration: line-through; }
+.depchip .depx { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
+.depchip .depx:hover { color: var(--danger); }
+select.depadd { font-size: 13px; color: var(--muted); }
+
 /* AI assistant chat */
 .chatwrap { display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin: 0 auto 12px; }
 .cmsg { max-width: 88%; padding: 10px 14px; border-radius: 15px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }

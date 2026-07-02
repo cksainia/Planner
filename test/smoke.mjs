@@ -224,6 +224,36 @@ try {
     RESULTS.push([stNow.tasks.some(function(t){return t.title==='Meal prep' && t.goalIds[0]==='g1' && t.bucket==='today';}), 'chat add_task lands with the goal linked']);
     RESULTS.push([stNow.tasks.some(function(t){return t.parentId==='par' && t.title==='Review copy';}), 'chat add_subtask lands as a checklist step']);
     RESULTS.push([stNow.tasks.find(function(t){return t.id==='par';}).priority==='p1', 'chat update_task patches the task']);
+
+    // 17) Task dependencies
+    store.importState({ goals:[{id:'g1',title:'Ship',weight:3}], tasks:[
+      {id:'w1',title:'Design the API',goalIds:['g1'],bucket:'today'},
+      {id:'w2',title:'Build the API',goalIds:['g1'],bucket:'today',deps:['w1']},
+    ], seedVersion:1 }, { markSeed:true });
+    store.applyCloud(null);
+    view='tasks'; tasksView='goal'; render();
+    RESULTS.push([!!document.querySelector('.task[data-id=w2] .blockedchip'), 'blocked task shows a lock badge naming its blocker']);
+    RESULTS.push([!document.querySelector('.task[data-id=w1] .blockedchip'), 'the blocker itself carries no badge']);
+    // editor exposes the Blocked-by picker without self/cycle candidates
+    document.querySelector('.task[data-id=w1] .tbody').click();
+    var depSel = document.querySelector('#overlay #edDepAdd') || document.querySelector('#edDepAdd, #detDepAdd');
+    var depOpts = depSel ? Array.prototype.map.call(depSel.querySelectorAll('option'), function(o){return o.value;}) : [];
+    RESULTS.push([!!depSel, 'task editor/detail shows a Blocked-by picker']);
+    RESULTS.push([depOpts.indexOf('w1')<0 && depOpts.indexOf('w2')<0, 'picker offers neither self nor a cycle-creating task']);
+    closeOverlay();
+    // Apply resolves a same-batch title dep to the real new id
+    var dv = ai.normOps([
+      { op:'add_task', title:'Write docs', goal:'g1', bucket:'later' },
+      { op:'add_task', title:'Publish docs', goal:'g1', bucket:'later', deps:['Write docs'] },
+    ], store.getState());
+    var dctx = { created: {} };
+    dv.ops.forEach(function(o){ applyOp(o, dctx); });
+    var wd = store.getState().tasks.find(function(t){return t.title==='Write docs';});
+    var pd = store.getState().tasks.find(function(t){return t.title==='Publish docs';});
+    RESULTS.push([wd && pd && pd.deps.length===1 && pd.deps[0]===wd.id, 'chat batch: "Publish docs" ends up blocked by the real id of "Write docs"']);
+    // completing the blocker frees the dependent on the next paint
+    store.completeTask('w1'); render();
+    RESULTS.push([!document.querySelector('.task[data-id=w2] .blockedchip'), 'completing the blocker clears the lock badge']);
   `);
 
   let pass = 0, fail = 0;

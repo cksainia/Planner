@@ -54,6 +54,31 @@ function unblockCount(state, taskId) {
   return state.tasks.filter((t) => t.status !== 'done' && (t.deps || []).includes(taskId)).length;
 }
 
+// Would making `taskId` depend on `depId` create a circular chain?
+// True when depId (or anything it transitively waits on) is taskId itself.
+export function wouldCycle(state, taskId, depId) {
+  if (!taskId || !depId) return false;
+  if (taskId === depId) return true;
+  const byId = Object.fromEntries(state.tasks.map((t) => [t.id, t]));
+  const seen = new Set();
+  const stack = [depId];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (cur === taskId) return true;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const d of ((byId[cur] && byId[cur].deps) || [])) stack.push(d);
+  }
+  return false;
+}
+
+// The not-done tasks this one is still waiting on (dangling ids ignored).
+export function blockersOf(state, task) {
+  return (task.deps || [])
+    .map((d) => state.tasks.find((x) => x.id === d))
+    .filter((b) => b && b.status !== 'done');
+}
+
 function goalWeight(state, task) {
   const ws = (task.goalIds || []).map((gid) => {
     const g = state.goals.find((x) => x.id === gid);
