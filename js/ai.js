@@ -246,6 +246,9 @@ export function snapshotForAI(state, today = null) {
     recentlyCompleted: doneRecent,
     winsToday: (st.wins || []).filter((w) => today && w.date === today).map((w) => w.text),
     frogTaskId: (today && st.frogByDate && st.frogByDate[today]) || null,
+    todayPlan: (today && st.dailyPlan && st.dailyPlan[today])
+      ? { mustDoIds: st.dailyPlan[today].mustDoIds || [], capacityMins: st.dailyPlan[today].capacityMins }
+      : null,
     dailyBudgetMins: st.settings ? st.settings.dailyBudgetMins : undefined,
   };
 }
@@ -332,8 +335,13 @@ export function normOps(raw, state) {
       out.push({ op: 'update_task', id: o.id, fields, label: `Update “${taskTitle(state, o.id)}”: ${disp}` });
     } else if (o.op === 'complete_task' || o.op === 'delete_task' || o.op === 'set_frog') {
       if (!o.id || !(state.tasks || []).some((t) => t.id === o.id)) { skipped++; continue; }
-      const verb = { complete_task: 'Complete', delete_task: 'Delete', set_frog: 'Make today’s frog:' }[o.op];
-      out.push({ op: o.op, id: o.id, label: `${verb} “${taskTitle(state, o.id)}”` });
+      if (o.op === 'set_frog') {
+        const day = o.day === 'tomorrow' ? 'tomorrow' : 'today';
+        out.push({ op: 'set_frog', id: o.id, day, label: `Make ${day}’s frog: “${taskTitle(state, o.id)}”` });
+      } else {
+        const verb = { complete_task: 'Complete', delete_task: 'Delete' }[o.op];
+        out.push({ op: o.op, id: o.id, label: `${verb} “${taskTitle(state, o.id)}”` });
+      }
     } else if (o.op === 'add_win') {
       const text = String(o.text || '').trim();
       if (!text) { skipped++; continue; }
@@ -366,8 +374,7 @@ export function normOps(raw, state) {
   return { ops: out, skipped };
 }
 
-const ASSIST_SYS = 'You are the assistant inside "Life Planner", the user\'s personal goal & task planner. You receive their full planner state as JSON plus a request. Reply ONLY with JSON: {"reply": string, "ops": array}. '
-  + '"reply" is a short, warm, direct answer in plain text (no markdown, under 90 words). "ops" is the list of concrete changes to make (empty array if the request is just a question). The app shows the ops to the user for one-tap approval, then applies them. '
+const OPS_DOC = 'Reply ONLY with JSON: {"reply": string, "ops": array}. "reply" is plain text (no markdown). "ops" is the list of concrete changes (empty array if none). The app shows the ops to the user for one-tap approval, then applies them. '
   + 'Allowed ops: '
   + '{"op":"add_task","title":str,"goal":goalId|null,"project":str|null,"bucket":"inbox|today|tomorrow|later|someday","priority":"p1|p2|p3|p4","effortMins":num,"context":"work|home|outdoor|digital|family|personal","important":bool,"urgent":bool,"deep":bool,"dueDate":"YYYY-MM-DD"|null,"deadline":"YYYY-MM-DD"|null,"recur":"none|daily|weekly|monthly","deps":[taskId…]|null,"notes":str|null} · '
   + '{"op":"add_subtask","parentId":taskId,"title":str} (a concrete checklist step under an existing task) · '
@@ -376,21 +383,40 @@ const ASSIST_SYS = 'You are the assistant inside "Life Planner", the user\'s per
   + '{"op":"add_win","text":str,"goal":goalId|null} · '
   + '{"op":"add_goal","title":str,"metric":"taskPercent|weight|count|shipped|habit|none","target":num|null,"weight":1-5} · '
   + '{"op":"update_goal","id":goalId,"title"?,"metric"?,"target"?,"baseline"?,"weight"?} · '
-  + '{"op":"set_frog","id":taskId} (today\'s single most important task). '
-  + 'Rules: use ids EXACTLY as they appear in the state. ALWAYS set "goal" on new tasks to the best-fitting goal id (null only if truly unrelated). When asked to break work down, add 3-6 add_subtask ops with short concrete steps. When categorizing or planning, prefer update_task over creating duplicates. '
-  + '"deps" sequences tasks: a task with deps stays blocked (off the daily plan) until every dep is done. Use it whenever the user implies order ("after", "once X is done", "then"). Entries are task ids; to depend on a task you are creating earlier in this SAME ops list, use that task\'s exact title string instead (it has no id yet). Sub-tasks (add_subtask) don\'t need deps. '
+  + '{"op":"set_frog","id":taskId,"day":"today"|"tomorrow"} (the day\'s single most important task). '
+  + 'Use ids EXACTLY as they appear in the state. ALWAYS set "goal" on new tasks to the best-fitting goal id (null only if truly unrelated). '
+  + '"deps" sequences tasks: a task with deps stays blocked (off the daily plan) until every dep is done. Use it whenever the user implies order ("after", "once X is done", "then"). Entries are task ids; to depend on a task you are creating earlier in this SAME ops list, use that task\'s exact title string instead (it has no id yet). Sub-tasks (add_subtask) don\'t need deps. ';
+
+const ASSIST_SYS = 'You are the assistant inside "Life Planner", the user\'s personal goal & task planner. You receive their full planner state as JSON plus a request. '
+  + OPS_DOC
+  + 'Keep "reply" warm, direct, under 90 words. When asked to break work down, add 3-6 add_subtask ops with short concrete steps. When categorizing or planning, prefer update_task over creating duplicates. '
   + 'If the request is ambiguous, ask one clarifying question in "reply" with empty ops. Never invent tasks the user didn\'t imply.';
 
-// One assistant turn. `history` = [{role:'user'|'assistant', text}] (recent turns).
-export async function assistant(userText, state, history = [], today = null) {
+// The nightly voice debrief: a zero-judgment accountability partner. The user
+// rambles about how the day ACTUALLY went; the coach logs wins (especially
+// off-plan ones), closes finished work, re-homes slips without lecturing, and
+// sets up tomorrow as a fresh start.
+const DEBRIEF_SYS = 'You are the evening debrief coach inside "Life Planner" — a warm, zero-judgment accountability partner for someone who fights procrastination and planner-avoidance (opening the app must never feel like an accusation). The user talks freely (dictated, rambling) about how their day actually went. '
+  + OPS_DOC
+  + 'Debrief flow — this is a MULTI-TURN conversation. Do ONE step per reply, keep replies under 110 words, and end each reply with exactly one question: '
+  + '(1) Listen, then reflect back the real wins FIRST — especially meaningful work that was NOT on the plan. Off-plan progress counts fully; name it as real progress, never call it a distraction. Log add_win ops for every concrete accomplishment mentioned (tag the best-fitting goal). '
+  + '(2) If they describe finishing something that matches an open task, add complete_task ops. '
+  + '(3) For what got skipped or avoided: normalize it in one short sentence (never lecture, never enumerate everything pending), quietly move it forward (update_task bucket "tomorrow" or "later"), and for a genuinely avoided area offer ONE tiny re-entry step of 15 minutes or less (add_task/add_subtask, effortMins ≤ 15) — the smallest possible start, like "put on shoes and stand in the backyard for 10 minutes". '
+  + '(4) Plan tomorrow together: 3-5 realistic picks sized to their stated energy (update_task bucket "tomorrow"), then {"op":"set_frog","day":"tomorrow"} for the one that matters most. '
+  + '(5) Close with the big picture: name the asymmetric progress across their goals lately and one genuine, specific encouragement. '
+  + 'Hard rules: never scold; never use the words "overdue", "behind", "failed", or "should have". Yesterday is data, tomorrow is a fresh start.';
+
+// One assistant turn. `history` = [{role:'user'|'assistant', text}] (recent
+// turns). `mode` = 'chat' | 'debrief'.
+export async function assistant(userText, state, history = [], today = null, mode = 'chat') {
   const text = String(userText || '').trim();
   if (!text) return { reply: '', ops: [], skipped: 0 };
   if (!aiEnabled()) return { reply: 'The assistant needs an API key — add one in Setup → AI assist, then come back.', ops: [], skipped: 0, offline: true };
   const snap = snapshotForAI(state, today);
   const hist = (history || []).slice(-8).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
-  const user = `PLANNER STATE (JSON):\n${JSON.stringify(snap)}\n\n${hist ? `RECENT CONVERSATION:\n${hist}\n\n` : ''}USER REQUEST:\n${text}`;
+  const user = `PLANNER STATE (JSON):\n${JSON.stringify(snap)}\n\n${hist ? `RECENT CONVERSATION:\n${hist}\n\n` : ''}USER ${mode === 'debrief' ? 'SAYS' : 'REQUEST'}:\n${text}`;
   try {
-    const out = await callModel(ASSIST_SYS, user, 2000);
+    const out = await callModel(mode === 'debrief' ? DEBRIEF_SYS : ASSIST_SYS, user, 2000);
     const j = extractJSON(out);
     if (j && (j.reply !== undefined || j.ops !== undefined)) {
       const { ops, skipped } = normOps(j.ops || [], state);

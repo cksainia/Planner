@@ -254,6 +254,28 @@ try {
     // completing the blocker frees the dependent on the next paint
     store.completeTask('w1'); render();
     RESULTS.push([!document.querySelector('.task[data-id=w2] .blockedchip'), 'completing the blocker clears the lock badge']);
+
+    // 18) Evening debrief + no-guilt mechanics
+    view='reflect'; render();
+    RESULTS.push([!!document.querySelector('.debriefcard [data-action=startDebrief]'), 'Reflect offers the evening debrief']);
+    document.querySelector('.debriefcard [data-action=startDebrief]').click();
+    RESULTS.push([view==='ai' && chat.mode==='debrief', 'starting the debrief jumps to the chat in debrief mode']);
+    RESULTS.push([!!document.querySelector('.debriefbar') && /no-judgment/.test(document.querySelector('#app').textContent), 'debrief banner + opener render']);
+    document.querySelector('[data-action=endDebrief]').click();
+    RESULTS.push([chat.mode==='chat', 'End returns the chat to normal mode']);
+    // fresh start: drifted tasks are re-homed to Later, old soft dates cleared
+    store.importState({ goals:[{id:'g1',title:'Ship',weight:3}], tasks:[
+      {id:'o1',title:'Old thing',goalIds:['g1'],bucket:'today',dueDate:'2026-01-01'},
+      {id:'o2',title:'Hard deadline',goalIds:['g1'],bucket:'today',deadline:'2026-01-05'},
+    ], seedVersion:1 }, { markSeed:true });
+    store.applyCloud(null);
+    view='reflect'; render();
+    RESULTS.push([!!document.querySelector('[data-action=freshStart]'), 'weekly review offers a bulk fresh start']);
+    document.querySelector('[data-action=freshStart]').click();
+    var o1 = store.getState().tasks.find(function(t){return t.id==='o1';});
+    var o2 = store.getState().tasks.find(function(t){return t.id==='o2';});
+    RESULTS.push([o1.bucket==='later' && o1.dueDate===null, 'fresh start re-homes the drifted task and clears its old soft date']);
+    RESULTS.push([o2.bucket==='later' && o2.deadline==='2026-01-05', 'fresh start keeps immovable deadlines intact']);
   `);
 
   let pass = 0, fail = 0;

@@ -465,3 +465,29 @@
   var s3 = snap.openTasks.filter(function (t) { return t.id === 'd3'; })[0];
   ok(s3 && s3.deps && s3.deps[0] === 'd2', 'snapshotForAI includes dependency links');
 })();
+
+// ---------------- EVENING DEBRIEF SUPPORT ----------------
+(function () {
+  importState({
+    goals: [normGoal({ id: 'g1', title: 'Ship', weight: 4 })],
+    tasks: [], projects: [], seedVersion: 1,
+  }, { markSeed: true });
+  applyCloud(null);
+  upsertTask({ id: 'f1', title: 'Big work task', goalIds: ['g1'], bucket: 'today' });
+
+  // set_frog carries a day (today default, tomorrow for the nightly plan)
+  var r = normOps([
+    { op: 'set_frog', id: 'f1', day: 'tomorrow' },
+    { op: 'set_frog', id: 'f1' },
+    { op: 'set_frog', id: 'nope', day: 'tomorrow' },
+  ], getState());
+  ok(r.ops.length === 2 && r.skipped === 1, 'set_frog validates the task id');
+  ok(r.ops[0].day === 'tomorrow' && r.ops[0].label.indexOf('tomorrow') >= 0, 'set_frog keeps day=tomorrow and says so in the label');
+  ok(r.ops[1].day === 'today', 'set_frog defaults to today');
+
+  // snapshot exposes today's plan so the debrief can compare plan vs reality
+  setDailyPlan('2026-07-06', { mustDoIds: ['f1'], capacityMins: 90, stamped: '2026-07-06' });
+  var snap = snapshotForAI(getState(), '2026-07-06');
+  ok(snap.todayPlan && snap.todayPlan.mustDoIds[0] === 'f1' && snap.todayPlan.capacityMins === 90, 'snapshotForAI includes today\'s planned must-dos');
+  ok(snapshotForAI(getState(), '2030-01-01').todayPlan === null, 'todayPlan is null when no plan was stamped for the day');
+})();

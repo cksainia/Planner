@@ -47,6 +47,7 @@ const ICONS = {
   ai:      { vb: '0 0 20 20', p: '<path d="M4 3.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6.5L6 16.5v-3H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M10 5.8l.85 2.05L12.9 8.7l-2.05.85L10 11.6l-.85-2.05L7.1 8.7l2.05-.85z" fill="currentColor" stroke="none"/>' },
   send:    { vb: '0 0 18 18', p: '<path d="M2.5 9L15.5 3l-3.4 12-3.3-4.6z"/><line x1="8.8" y1="10.4" x2="15.5" y2="3"/>' },
   lock:    { vb: '0 0 18 18', p: '<rect x="4" y="8" width="10" height="7.5" rx="1.5"/><path d="M6.5 8V5.5a2.5 2.5 0 0 1 5 0V8"/>' },
+  moon:    { vb: '0 0 18 18', p: '<path d="M13.5 10.2A5.8 5.8 0 1 1 8.3 3.6a4.6 4.6 0 0 0 5.2 6.6z"/>', f: true },
 };
 function icon(name, size = 14) {
   const d = ICONS[name]; if (!d) return '';
@@ -220,7 +221,7 @@ function renderInner() {
 // header doesn't imply activity on a day nothing's been done yet (#13).
 function streakLabel(st) {
   const n = computeStreak(st);
-  if (!n) return 'No streak yet';
+  if (!n) return 'Fresh start — one small win counts';
   const active = (st.wins || []).some((w) => w.date === store.todayStr());
   return `🔥 ${n}-day streak${active ? '' : ' · keep it alive'}`;
 }
@@ -726,6 +727,11 @@ function viewReflect() {
   const lastWk = st.lastWeeklyReview;
   const weekDue = !lastWk || store.addDays(lastWk, 7) <= today;
 
+  const debriefCard = `<section class="card debriefcard">
+      <h3 class="sech tight">${icon('moon', 14)} Evening debrief</h3>
+      <p class="muted small" style="margin:6px 0 10px">Talk through your day for a few minutes — I'll log the wins (planned or not), close what you finished, gently re-home what slipped, and set up tomorrow. Zero guilt, every night is a fresh start.</p>
+      <button class="primary" data-action="startDebrief" style="width:100%">Start tonight's debrief</button>
+    </section>`;
   const winsCard = `<section class="card">
       <h3 class="sech tight">Today's wins</h3>
       <div class="muted small">${md.planned ? `Must-dos: ${md.done}/${md.planned} done. ` : ''}🔥 ${computeStreak(st)}-day streak</div>
@@ -750,19 +756,24 @@ function viewReflect() {
       <div class="muted small">${weekDue ? 'Clear stale tasks and reset priorities.' : 'Done recently — ' + esc(prettyDate(lastWk)) + '.'}</div>
       ${weekDue ? weeklyReviewBody(st) : ''}
     </section>`;
-  if (isWide()) return `<div class="two-col"><div>${winsCard}${brainCard}</div><div>${frogCard}${weeklyCard}</div></div>`;
-  return `${winsCard}${brainCard}${frogCard}${weeklyCard}`;
+  if (isWide()) return `<div class="two-col"><div>${debriefCard}${winsCard}${brainCard}</div><div>${frogCard}${weeklyCard}</div></div>`;
+  return `${debriefCard}${winsCard}${brainCard}${frogCard}${weeklyCard}`;
+}
+// Tasks that drifted past their dates or have sat untouched in the backlog.
+function staleTasks(st, today) {
+  return st.tasks.filter((t) => t.status !== 'done' && !isChildOf(st, t) && (
+    (t.deadline || t.dueDate) && store.addDays(t.deadline || t.dueDate, 0) < today
+    || (t.bucket === 'later' && t.createdAt && t.createdAt.slice(0, 10) <= store.addDays(today, -21))));
 }
 function weeklyReviewBody(st) {
   const today = store.todayStr();
-  const stale = st.tasks.filter((t) => t.status !== 'done' && !isChildOf(st, t) && (
-    (t.deadline || t.dueDate) && store.addDays(t.deadline || t.dueDate, 0) < today
-    || (t.bucket === 'later' && t.createdAt && t.createdAt.slice(0, 10) <= store.addDays(today, -21))));
+  const stale = staleTasks(st, today);
   const list = stale.slice(0, 12).map((t) => `<div class="task"><div class="trow"><div class="tbody"><div class="ttitle">${esc(t.title)}</div></div>
     <div class="triage"><button class="btn xs" data-action="bucket" data-id="${t.id}" data-b="today">Today</button><button class="btn xs ghost" data-action="bucket" data-id="${t.id}" data-b="someday">Someday</button></div></div></div>`).join('');
-  return `<div class="muted small" style="margin:8px 0">${stale.length} stale / overdue task${stale.length === 1 ? '' : 's'} to triage:</div>
-    <div class="list">${list || '<span class="muted small">Nothing stale — great shape.</span>'}</div>
-    <button class="primary" style="margin-top:12px" data-action="finishWeekly">Finish weekly review</button>`;
+  return `<div class="muted small" style="margin:8px 0">${stale.length} task${stale.length === 1 ? ' has' : 's have'} drifted past their dates — normal life, nothing to answer for. Re-home them:</div>
+    <div class="list">${list || '<span class="muted small">Nothing has drifted — great shape.</span>'}</div>
+    ${stale.length ? `<button class="ghost" style="margin-top:12px;width:100%" data-action="freshStart">Fresh start: move all ${stale.length} to Later (clears old soft dates)</button>` : ''}
+    <button class="primary" style="margin-top:10px" data-action="finishWeekly">Finish weekly review</button>`;
 }
 
 // ---------- SETTINGS ----------
@@ -804,7 +815,7 @@ function viewSettings() {
 // ---------- AI ASSISTANT (free-form chat over the whole planner) ----------
 // The model sees a snapshot of goals/tasks and proposes structured ops; nothing
 // touches the store until the user taps Apply on the review card.
-let chat = { msgs: [], busy: false }; // session-only; not synced
+let chat = { msgs: [], busy: false, mode: 'chat' }; // session-only; not synced
 
 const CHAT_EXAMPLES = [
   'Plan my day — what should I focus on?',
@@ -812,14 +823,16 @@ const CHAT_EXAMPLES = [
   'Add: renew passports by end of July, high priority',
   'Which of my tasks aren’t linked to any goal? Fix that.',
 ];
+const DEBRIEF_OPENER = 'Good evening — this is a no-judgment zone. However today went, we start from here.\n\nTap the mic and just talk for a few minutes: what did you actually get into today? What felt good? What got skipped? Don’t organize it — I’ll pull out the wins (including the off-plan ones), close anything you finished, and we’ll set up tomorrow together.';
 
 function viewAssistant() {
   const hasKey = ai.aiEnabled();
   const keyWarn = hasKey ? '' : `<div class="nudge">The assistant needs an API key — add one in <a href="#" data-nav="settings" style="color:inherit">Setup → AI assist</a>.</div>`;
+  const banner = chat.mode === 'debrief' ? `<div class="debriefbar">${icon('moon', 14)} Evening debrief — no judgment, just a reset. <button class="ghost small" data-action="endDebrief">End</button></div>` : '';
   const intro = chat.msgs.length ? '' : `<section class="card">
       <h3 class="sech tight">${icon('ai', 15)} Your planner, on tap</h3>
       <p class="muted small" style="margin:6px 0 10px">I can see all your goals and tasks. Ask me to plan, re-prioritize, break work down, categorize, or add things — I'll propose the exact changes and you approve them with one tap.</p>
-      <div class="exchips">${CHAT_EXAMPLES.map((q) => `<button class="exchip" data-action="chatEx" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+      <div class="exchips"><button class="exchip debrief" data-action="startDebrief">${icon('moon', 12)} Evening debrief — talk through my day</button>${CHAT_EXAMPLES.map((q) => `<button class="exchip" data-action="chatEx" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
     </section>`;
   const msgs = chat.msgs.map((m, i) => {
     if (m.role === 'user') return `<div class="cmsg user">${esc(m.text)}</div>`;
@@ -832,8 +845,9 @@ function viewAssistant() {
   }).join('');
   const busy = chat.busy ? `<div class="cmsg ai typing"><i></i><i></i><i></i></div>` : '';
   const clear = chat.msgs.length ? `<div style="text-align:center"><button class="ghost small" data-action="chatClear">Clear conversation</button></div>` : '';
-  return `<div class="chatwrap">${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
-    <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="Ask or tell me anything about your plan…" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>`;
+  const ph = chat.mode === 'debrief' ? 'Tap the mic and talk about your day…' : 'Ask or tell me anything about your plan…';
+  return `<div class="chatwrap">${banner}${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
+    <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="${ph}" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>`;
 }
 const OP_ICON = { add_task: 'tasks', add_subtask: 'arrow', update_task: 'pencil', complete_task: 'today', delete_task: 'ring', add_win: 'star', add_goal: 'goals', update_goal: 'goals', set_frog: 'play' };
 
@@ -848,7 +862,7 @@ async function chatSend(text) {
   chat.msgs.push({ role: 'user', text });
   chat.busy = true;
   render(); scrollChat();
-  const r = await ai.assistant(text, S(), history, store.todayStr());
+  const r = await ai.assistant(text, S(), history, store.todayStr(), chat.mode);
   chat.busy = false;
   chat.msgs.push({ role: 'assistant', text: r.reply, ops: r.ops || [], skipped: r.skipped || 0 });
   render(); scrollChat();
@@ -881,7 +895,7 @@ function applyOp(o, ctx) {
     case 'add_win': return !!store.addWin({ text: o.text, goalId: o.goalId || null });
     case 'add_goal': return !!store.upsertGoal({ ...o.goal });
     case 'update_goal': { const cur = S().goals.find((g) => g.id === o.id); if (!cur) return false; return !!store.upsertGoal({ ...cur, ...o.patch }); }
-    case 'set_frog': store.setFrog(o.id); return true;
+    case 'set_frog': store.setFrog(o.id, o.day === 'tomorrow' ? store.addDays(store.todayStr(), 1) : null); return true;
   }
   return false;
 }
@@ -1218,7 +1232,14 @@ async function onClick(e) {
     case 'chatSend': { const el = $('#chatIn'); const v = (el && el.value || '').trim(); if (el) el.value = ''; chatSend(v); break; }
     case 'chatEx': chatSend(btn.dataset.q); break;
     case 'chatApply': applyAssistantOps(parseInt(btn.dataset.i, 10)); break;
-    case 'chatClear': chat = { msgs: [], busy: false }; render(); break;
+    case 'chatClear': chat = { msgs: [], busy: false, mode: 'chat' }; render(); break;
+    case 'startDebrief': {
+      view = 'ai'; chat.mode = 'debrief';
+      const last = chat.msgs[chat.msgs.length - 1];
+      if (!last || !last.opener) chat.msgs.push({ role: 'assistant', text: DEBRIEF_OPENER, ops: [], opener: true });
+      render(); scrollChat(); break;
+    }
+    case 'endDebrief': chat.mode = 'chat'; render(); break;
     case 'openWeight': view = 'weight'; render(); break;
     case 'wfRange': {
       if (!weightUI) break;
@@ -1244,6 +1265,15 @@ async function onClick(e) {
     }
     case 'setTomorrowFrog': { const sel = $('#frogSel').value; const tomorrow = store.addDays(store.todayStr(), 1); if (sel) store.setFrog(sel, tomorrow); else { const sug = suggestFrog(st, { today: tomorrow }); if (sug.task) store.setFrog(sug.task.id, tomorrow); } render(); break; }
     case 'finishWeekly': store.getState().lastWeeklyReview = store.todayStr(); store.save(); break;
+    case 'freshStart': {
+      // no-guilt bulk re-home: everything that drifted goes to Later; old SOFT
+      // due-dates are cleared (immovable deadlines are kept — they're real).
+      for (const t of staleTasks(st, store.todayStr())) {
+        t.bucket = 'later';
+        if (t.dueDate && t.dueDate < store.todayStr()) t.dueDate = null;
+      }
+      store.save(); render(); break;
+    }
     case 'setBudget': st.settings.dailyBudgetMins = parseInt(btn.dataset.m, 10) || 120; store.save(); break;
     case 'decompose': {
       const t = st.tasks.find((x) => x.id === id); if (!t) break;

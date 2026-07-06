@@ -342,6 +342,11 @@ select.depadd { font-size: 13px; color: var(--muted); }
 .exchips { display: flex; flex-wrap: wrap; gap: 8px; }
 .exchip { background: var(--surface2); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 7px 13px; font-size: 12.5px; cursor: pointer; text-align: left; }
 .exchip:hover { border-color: var(--accent); }
+.exchip.debrief { border-color: var(--accent); color: var(--accent); display: inline-flex; align-items: center; gap: 6px; }
+.debriefbar { display: flex; align-items: center; gap: 8px; background: var(--surface2); border: 1px solid var(--accent); border-radius: 12px; padding: 8px 12px; font-size: 13px; color: var(--accent); }
+.debriefbar .ghost { margin-left: auto; }
+.debriefcard { border-color: var(--accent); }
+.debriefcard .sech { display: flex; align-items: center; gap: 6px; }
 .chatbar { display: flex; gap: 8px; align-items: flex-end; max-width: 760px; margin: 0 auto; position: sticky; bottom: calc(64px + env(safe-area-inset-bottom, 0px)); background: var(--bg); padding: 8px 0 4px; }
 .chatbar textarea { flex: 1; resize: none; min-height: 40px; max-height: 120px; background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; color: var(--text); padding: 10px 12px; font: inherit; font-size: 14px; }
 .chatbar textarea:focus { outline: none; border-color: var(--accent); }
