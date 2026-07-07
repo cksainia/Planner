@@ -25,7 +25,10 @@ dom.window.LP_FIREBASE = { apiKey: 'REPLACE_ME' }; // -> local-only mode, no CDN
 let WIDE_MATCH = false;
 dom.window.matchMedia = (q) => ({ matches: WIDE_MATCH, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
 // SpeechRecognition stub so voiceSupported() is true and the mic buttons render.
-dom.window.SpeechRecognition = function () { this.start = function () {}; this.stop = function () {}; };
+dom.window.SpeechRecognition = function () {
+  this.start = function () {}; this.stop = function () {};
+  dom.window.__lastSR = this; // let tests drive onresult/onend by hand
+};
 
 globalThis.RESULTS = [];
 const ok = (m, c) => RESULTS.push([!!c, m]);
@@ -276,6 +279,22 @@ try {
     var o2 = store.getState().tasks.find(function(t){return t.id==='o2';});
     RESULTS.push([o1.bucket==='later' && o1.dueDate===null, 'fresh start re-homes the drifted task and clears its old soft date']);
     RESULTS.push([o2.bucket==='later' && o2.deadline==='2026-01-05', 'fresh start keeps immovable deadlines intact']);
+
+    // 19) Uninterrupted dictation in the chat (no auto-send on pauses)
+    function seg(t, fin) { var s=[{transcript:t}]; s.isFinal=fin; return s; }
+    view='ai'; render();
+    document.querySelector('[data-action=mic][data-target=chat]').click();
+    RESULTS.push([isDictating(), 'chat mic starts a dictation session']);
+    RESULTS.push([document.querySelector('#dictHint').classList.contains('show'), 'listening hint appears while dictating']);
+    var sr = window.__lastSR;
+    sr.onresult({ resultIndex:0, results:[ seg('today I built the portfolio site', true) ] });
+    sr.onresult({ resultIndex:0, results:[ seg('and installed most of the turf', true) ] });
+    RESULTS.push([isDictating() && /portfolio site and installed/.test(document.querySelector('#chatIn').value), 'transcript accumulates across pauses without sending']);
+    var msgsBefore = chat.msgs.length;
+    sr.onresult({ resultIndex:0, results:[ seg('Claude I am done', true) ] });
+    RESULTS.push([!isDictating(), 'saying the end phrase finishes the session']);
+    var lastMsg = chat.msgs[chat.msgs.length-1];
+    RESULTS.push([chat.msgs.length===msgsBefore+1 && lastMsg.role==='user' && /turf$/.test(lastMsg.text) && !/done/i.test(lastMsg.text), 'the full dump is sent with the end phrase stripped']);
   `);
 
   let pass = 0, fail = 0;

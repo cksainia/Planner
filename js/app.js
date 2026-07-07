@@ -8,7 +8,7 @@ import { computeStreak, daySummary, mustDoStatus, rollup } from './reflection.js
 import { dashboard, goalProgress, goalTasks, weightSeries, weightStats } from './dashboard.js';
 import * as ai from './ai.js';
 import { initFirebase, isConfigured, onAuth, signInWithGoogle, signOutUser, watchDoc, writeDoc } from './firebase.js';
-import { voiceSupported, startListening, stopListening } from './voice.js';
+import { voiceSupported, startListening, stopListening, startDictation, stopDictation, isDictating } from './voice.js';
 
 const PRI_LABEL = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
 const BUCKET_LABEL = { inbox: 'Inbox', today: 'Today', tomorrow: 'Tomorrow', later: 'Later', someday: 'Someday' };
@@ -197,6 +197,9 @@ function renderInner() {
   const active = document.activeElement;
   const focusId = samePage && active && active.id && app().contains(active) ? active.id : null;
   const caret = (focusId && 'selectionStart' in active) ? active.selectionStart : null;
+  // a live dictation transcript lives in the textarea — never lose it to a re-render
+  const dictEl = isDictating() ? $('#chatIn') : null;
+  const dictVal = dictEl ? dictEl.value : null;
 
   const body = { today: viewToday, tasks: viewTasks, goals: viewGoals, ai: viewAssistant, reflect: viewReflect, settings: viewSettings, weight: viewWeight }[view] || viewToday;
   if (isWide()) app().innerHTML = wideShell(body);
@@ -211,6 +214,7 @@ function renderInner() {
     </nav>`;
   wire();
   lastView = view;
+  if (dictVal != null) { const f = $('#chatIn'); if (f) f.value = dictVal; }
   if (focusId) {
     const el = document.getElementById(focusId);
     if (el) { try { el.focus({ preventScroll: true }); if (caret != null && 'selectionStart' in el) el.setSelectionRange(caret, caret); } catch (e) {} }
@@ -823,7 +827,7 @@ const CHAT_EXAMPLES = [
   'Add: renew passports by end of July, high priority',
   'Which of my tasks aren’t linked to any goal? Fix that.',
 ];
-const DEBRIEF_OPENER = 'Good evening — this is a no-judgment zone. However today went, we start from here.\n\nTap the mic and just talk for a few minutes: what did you actually get into today? What felt good? What got skipped? Don’t organize it — I’ll pull out the wins (including the off-plan ones), close anything you finished, and we’ll set up tomorrow together.';
+const DEBRIEF_OPENER = 'Good evening — this is a no-judgment zone. However today went, we start from here.\n\nTap the mic and just talk, as long as you like — pauses are fine, I won’t cut you off. What did you actually get into today? What felt good? What got skipped? Don’t organize it.\n\nWhen you’ve said it all, just say “Claude, I’m done” (or tap the mic again) and I’ll pull out the wins — including the off-plan ones — close anything you finished, and set up tomorrow with you.';
 
 function viewAssistant() {
   const hasKey = ai.aiEnabled();
@@ -847,7 +851,8 @@ function viewAssistant() {
   const clear = chat.msgs.length ? `<div style="text-align:center"><button class="ghost small" data-action="chatClear">Clear conversation</button></div>` : '';
   const ph = chat.mode === 'debrief' ? 'Tap the mic and talk about your day…' : 'Ask or tell me anything about your plan…';
   return `<div class="chatwrap">${banner}${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
-    <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="${ph}" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>`;
+    <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="${ph}" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>
+    <div id="dictHint" class="dicthint ${isDictating() ? 'show' : ''}">${icon('mic', 11)} Listening — take all the time you need, pauses are fine. Say <b>“Claude, I’m done”</b> or tap the mic again to finish.</div>`;
 }
 const OP_ICON = { add_task: 'tasks', add_subtask: 'arrow', update_task: 'pencil', complete_task: 'today', delete_task: 'ring', add_win: 'star', add_goal: 'goals', update_goal: 'goals', set_frog: 'play' };
 
@@ -914,10 +919,12 @@ function applyAssistantOps(i) {
 const MIC_FIELD = { quick: '#quickIn', title: '#eTitle', win: '#winText', brain: '#brainDump', chat: '#chatIn' };
 function micBtn(target) {
   if (!voiceSupported()) return '';
-  return `<button class="mic ${micTarget === target ? 'listening' : ''}" data-action="mic" data-target="${target}" aria-label="Dictate with voice" title="Speak">${icon('mic', 15)}</button>`;
+  const on = target === 'chat' ? isDictating() : micTarget === target;
+  return `<button class="mic ${on ? 'listening' : ''}" data-action="mic" data-target="${target}" aria-label="Dictate with voice" title="Speak">${icon('mic', 15)}</button>`;
 }
 function endMic() { if (micBtnEl) micBtnEl.classList.remove('listening'); micTarget = null; micBtnEl = null; }
 function toggleMic(target, btn) {
+  if (target === 'chat') { toggleDictation(btn); return; }  // long-form: no auto-stop
   if (micTarget === target) { stopListening(); return; }   // tap again = stop
   if (micTarget) stopListening();
   micTarget = target; micBtnEl = btn; btn.classList.add('listening');
@@ -929,6 +936,34 @@ function toggleMic(target, btn) {
   });
   if (!started) endMic();
 }
+// ---- long-form dictation for the chat/debrief: listens through pauses,
+// finishes only on tap or a spoken "Claude, I'm done". ----
+let dictBtnEl = null;
+function setDictUI(on) {
+  if (dictBtnEl) dictBtnEl.classList.toggle('listening', on);
+  const h = $('#dictHint'); if (h) h.classList.toggle('show', on);
+  if (!on) dictBtnEl = null;
+}
+function toggleDictation(btn) {
+  if (isDictating()) { stopDictation(); return; }  // tap again = finish & send (onDone)
+  if (micTarget) stopListening();
+  dictBtnEl = btn;
+  const started = startDictation({
+    onUpdate: (t) => { const f = $('#chatIn'); if (f) { f.value = t; f.scrollTop = f.scrollHeight; } },
+    onDone: (t) => {
+      setDictUI(false);
+      const f = $('#chatIn'); if (f) f.value = '';
+      if (t) chatSend(t); else render();
+    },
+    onError: (code) => {
+      setDictUI(false);
+      if (/not-allowed|service-not-allowed/.test(code)) console.warn('[voice] mic permission blocked');
+      render();
+    },
+  });
+  if (started) setDictUI(true);
+}
+
 async function onVoiceFinal(target, text) {
   text = (text || '').trim();
   if (!text) return;
@@ -1229,7 +1264,10 @@ async function onClick(e) {
     case 'habit': store.toggleHabit(id); break;
     case 'addSub': { const el = $('#sub-' + id); const v = (el && el.value || '').trim(); if (v) store.addSubtask(id, v); break; }
     case 'mic': toggleMic(btn.dataset.target, btn); break;
-    case 'chatSend': { const el = $('#chatIn'); const v = (el && el.value || '').trim(); if (el) el.value = ''; chatSend(v); break; }
+    case 'chatSend': {
+      if (isDictating()) { stopDictation(); break; }  // finishes the dump → onDone sends it
+      const el = $('#chatIn'); const v = (el && el.value || '').trim(); if (el) el.value = ''; chatSend(v); break;
+    }
     case 'chatEx': chatSend(btn.dataset.q); break;
     case 'chatApply': applyAssistantOps(parseInt(btn.dataset.i, 10)); break;
     case 'chatClear': chat = { msgs: [], busy: false, mode: 'chat' }; render(); break;

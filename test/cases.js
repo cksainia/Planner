@@ -491,3 +491,18 @@
   ok(snap.todayPlan && snap.todayPlan.mustDoIds[0] === 'f1' && snap.todayPlan.capacityMins === 90, 'snapshotForAI includes today\'s planned must-dos');
   ok(snapshotForAI(getState(), '2030-01-01').todayPlan === null, 'todayPlan is null when no plan was stamped for the day');
 })();
+
+// ---------------- DICTATION END-PHRASE DETECTION ----------------
+(function () {
+  var r = stripEndPhrase('I did a lot today Claude I\'m done');
+  ok(r.done === true && r.text === 'I did a lot today', 'detects "Claude I\'m done" and strips it');
+  r = stripEndPhrase('okay Claude, that\'s my dump');
+  ok(r.done === true && r.text === '', 'detects "okay Claude, that\'s my dump"');
+  ok(stripEndPhrase('cloud I am done.').done === true, 'tolerates the "cloud" mis-transcription of Claude');
+  ok(stripEndPhrase('worked on the deck. I\'m done with my dump').done === true, 'detects "I\'m done with my dump"');
+  ok(stripEndPhrase('over to you').done === true, 'detects "over to you"');
+  r = stripEndPhrase('I\'m done with excuses and I kept going anyway');
+  ok(r.done === false && r.text === 'I\'m done with excuses and I kept going anyway', 'mid-sentence "I\'m done" does NOT end the dump');
+  r = stripEndPhrase('today I worked on the turf');
+  ok(r.done === false && r.text === 'today I worked on the turf', 'plain speech passes through untouched');
+})();

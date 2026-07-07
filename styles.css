@@ -351,6 +351,10 @@ select.depadd { font-size: 13px; color: var(--muted); }
 .chatbar textarea { flex: 1; resize: none; min-height: 40px; max-height: 120px; background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; color: var(--text); padding: 10px 12px; font: inherit; font-size: 14px; }
 .chatbar textarea:focus { outline: none; border-color: var(--accent); }
 .chatbar .addbtn { align-self: flex-end; }
+.dicthint { display: none; max-width: 760px; margin: 6px auto 0; font-size: 12.5px; color: var(--muted); text-align: center; align-items: center; justify-content: center; gap: 6px; }
+.dicthint.show { display: flex; }
+.dicthint b { color: var(--danger); font-weight: 600; }
+.dicthint .ic { color: var(--danger); }
 
 @media (max-width: 959px) {
   .frame { display: block; }
