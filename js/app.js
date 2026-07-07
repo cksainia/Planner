@@ -127,6 +127,10 @@ function boot() {
     const onMq = () => { if (booted) render(); };
     if (mql.addEventListener) mql.addEventListener('change', onMq); else if (mql.addListener) mql.addListener(onMq);
   }
+  // wake locks auto-release when the page is hidden — re-arm if still dictating
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && isDictating()) acquireWakeLock(); });
+  }
 
   if (cfgOk) {
     onAuth((u) => {
@@ -731,10 +735,11 @@ function viewReflect() {
   const lastWk = st.lastWeeklyReview;
   const weekDue = !lastWk || store.addDays(lastWk, 7) <= today;
 
+  const draftNote = dictDraft() ? `<p class="muted small" style="margin:8px 0 0;color:var(--warn)">${icon('mic', 11)} A saved dictation is waiting in the chat — nothing was lost.</p>` : '';
   const debriefCard = `<section class="card debriefcard">
       <h3 class="sech tight">${icon('moon', 14)} Evening debrief</h3>
       <p class="muted small" style="margin:6px 0 10px">Talk through your day for a few minutes — I'll log the wins (planned or not), close what you finished, gently re-home what slipped, and set up tomorrow. Zero guilt, every night is a fresh start.</p>
-      <button class="primary" data-action="startDebrief" style="width:100%">Start tonight's debrief</button>
+      <button class="primary" data-action="startDebrief" style="width:100%">Start tonight's debrief</button>${draftNote}
     </section>`;
   const winsCard = `<section class="card">
       <h3 class="sech tight">Today's wins</h3>
@@ -833,6 +838,17 @@ function viewAssistant() {
   const hasKey = ai.aiEnabled();
   const keyWarn = hasKey ? '' : `<div class="nudge">The assistant needs an API key — add one in <a href="#" data-nav="settings" style="color:inherit">Setup → AI assist</a>.</div>`;
   const banner = chat.mode === 'debrief' ? `<div class="debriefbar">${icon('moon', 14)} Evening debrief — no judgment, just a reset. <button class="ghost small" data-action="endDebrief">End</button></div>` : '';
+  const draft = !isDictating() && dictDraft();
+  const restore = draft ? `<section class="card dictrestore">
+      <h3 class="sech tight">${icon('mic', 13)} Recovered dictation</h3>
+      <p class="muted small" style="margin:6px 0 4px">I saved everything you said (${agoLabel(draft.at)}) — nothing was lost:</p>
+      <p class="draftpreview">“${esc(draft.text.length > 220 ? draft.text.slice(0, 220) + '…' : draft.text)}”</p>
+      <div class="btnrow" style="margin-top:10px">
+        <button class="primary" data-action="dictSend" style="flex:1">Send it</button>
+        <button class="ghost" data-action="dictResume">Keep dictating</button>
+        <button class="ghost" data-action="dictDiscard" style="color:var(--muted)">Discard</button>
+      </div>
+    </section>` : '';
   const intro = chat.msgs.length ? '' : `<section class="card">
       <h3 class="sech tight">${icon('ai', 15)} Your planner, on tap</h3>
       <p class="muted small" style="margin:6px 0 10px">I can see all your goals and tasks. Ask me to plan, re-prioritize, break work down, categorize, or add things — I'll propose the exact changes and you approve them with one tap.</p>
@@ -850,9 +866,9 @@ function viewAssistant() {
   const busy = chat.busy ? `<div class="cmsg ai typing"><i></i><i></i><i></i></div>` : '';
   const clear = chat.msgs.length ? `<div style="text-align:center"><button class="ghost small" data-action="chatClear">Clear conversation</button></div>` : '';
   const ph = chat.mode === 'debrief' ? 'Tap the mic and talk about your day…' : 'Ask or tell me anything about your plan…';
-  return `<div class="chatwrap">${banner}${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
+  return `<div class="chatwrap">${banner}${restore}${keyWarn}${intro}${msgs}${busy}${clear}<div id="chatEnd"></div></div>
     <div class="chatbar"><textarea id="chatIn" rows="1" placeholder="${ph}" aria-label="Message the assistant"></textarea>${micBtn('chat')}<button class="addbtn" data-action="chatSend" aria-label="Send">${icon('send', 15)}</button></div>
-    <div id="dictHint" class="dicthint ${isDictating() ? 'show' : ''}">${icon('mic', 11)} Listening — take all the time you need, pauses are fine. Say <b>“Claude, I’m done”</b> or tap the mic again to finish.</div>`;
+    <div id="dictHint" class="dicthint ${isDictating() ? 'show' : ''}">${icon('mic', 11)} Listening — pauses are fine, the screen stays awake, and every word is saved as you go. Say <b>“Claude, I’m done”</b> or tap the mic again to finish.</div>`;
 }
 const OP_ICON = { add_task: 'tasks', add_subtask: 'arrow', update_task: 'pencil', complete_task: 'today', delete_task: 'ring', add_win: 'star', add_goal: 'goals', update_goal: 'goals', set_frog: 'play' };
 
@@ -937,31 +953,58 @@ function toggleMic(target, btn) {
   if (!started) endMic();
 }
 // ---- long-form dictation for the chat/debrief: listens through pauses,
-// finishes only on tap or a spoken "Claude, I'm done". ----
+// finishes only on tap or a spoken "Claude, I'm done". Every update is saved to
+// device storage (crash/lock-proof), and a screen wake lock keeps the phone
+// from sleeping mid-rant — a locked screen kills the mic AND the page.
+const DICT_DRAFT_KEY = 'lifeplanner.dictDraft.v1';
+function saveDictDraft(text) {
+  try { localStorage.setItem(DICT_DRAFT_KEY, JSON.stringify({ text, at: Date.now(), mode: chat.mode })); } catch (e) {}
+}
+function dictDraft() {
+  try { const d = JSON.parse(localStorage.getItem(DICT_DRAFT_KEY) || 'null'); return d && d.text && d.text.trim() ? d : null; } catch (e) { return null; }
+}
+function clearDictDraft() { try { localStorage.removeItem(DICT_DRAFT_KEY); } catch (e) {} }
+
+let wakeLock = null;
+async function acquireWakeLock() {
+  try { if (navigator.wakeLock && navigator.wakeLock.request) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* denied/unsupported — draft persistence still protects the dump */ }
+}
+function releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null; }
+
 let dictBtnEl = null;
 function setDictUI(on) {
   if (dictBtnEl) dictBtnEl.classList.toggle('listening', on);
   const h = $('#dictHint'); if (h) h.classList.toggle('show', on);
   if (!on) dictBtnEl = null;
 }
-function toggleDictation(btn) {
+function toggleDictation(btn, seedText) {
   if (isDictating()) { stopDictation(); return; }  // tap again = finish & send (onDone)
   if (micTarget) stopListening();
   dictBtnEl = btn;
+  // continue from whatever is already in the box (typed prefix or recovered draft)
+  const box = $('#chatIn');
+  const seed = seedText !== undefined ? seedText : (box ? box.value.trim() : '');
   const started = startDictation({
-    onUpdate: (t) => { const f = $('#chatIn'); if (f) { f.value = t; f.scrollTop = f.scrollHeight; } },
+    seed,
+    onUpdate: (t) => {
+      const f = $('#chatIn'); if (f) { f.value = t; f.scrollTop = f.scrollHeight; }
+      saveDictDraft(t);
+    },
     onDone: (t) => {
-      setDictUI(false);
+      setDictUI(false); releaseWakeLock(); clearDictDraft();
       const f = $('#chatIn'); if (f) f.value = '';
       if (t) chatSend(t); else render();
     },
-    onError: (code) => {
-      setDictUI(false);
+    onError: (code, textSoFar) => {
+      // keep the draft — whatever was captured is safe and offered for recovery
+      setDictUI(false); releaseWakeLock();
+      if (textSoFar) saveDictDraft(textSoFar);
       if (/not-allowed|service-not-allowed/.test(code)) console.warn('[voice] mic permission blocked');
       render();
+      const f = $('#chatIn'); if (f && textSoFar) f.value = textSoFar;
     },
   });
-  if (started) setDictUI(true);
+  if (started) { setDictUI(true); if (seed) saveDictDraft(seed); acquireWakeLock(); }
 }
 
 async function onVoiceFinal(target, text) {
@@ -1271,6 +1314,21 @@ async function onClick(e) {
     case 'chatEx': chatSend(btn.dataset.q); break;
     case 'chatApply': applyAssistantOps(parseInt(btn.dataset.i, 10)); break;
     case 'chatClear': chat = { msgs: [], busy: false, mode: 'chat' }; render(); break;
+    case 'dictSend': {
+      const d = dictDraft(); clearDictDraft();
+      if (d) { if (d.mode === 'debrief') chat.mode = 'debrief'; chatSend(d.text); } else render();
+      break;
+    }
+    case 'dictResume': {
+      const d = dictDraft(); clearDictDraft();
+      if (d && d.mode === 'debrief') chat.mode = 'debrief';
+      render();
+      const f = $('#chatIn'); if (f && d) f.value = d.text;
+      const mb = $('[data-action=mic][data-target=chat]');
+      if (mb) toggleDictation(mb, d ? d.text : '');
+      break;
+    }
+    case 'dictDiscard': clearDictDraft(); render(); break;
     case 'startDebrief': {
       view = 'ai'; chat.mode = 'debrief';
       const last = chat.msgs[chat.msgs.length - 1];
@@ -1360,6 +1418,13 @@ function downloadJSON() {
 }
 function msg(sel, text) { const el = $(sel); if (el) el.textContent = text; }
 function humanDate(s) { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+function agoLabel(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 2) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  return h < 24 ? h + 'h ago' : Math.round(h / 24) + 'd ago';
+}
 function prettyDate(s) { if (!s) return 'never'; const t = store.todayStr(); if (s === t) return 'today'; if (s === store.addDays(t, -1)) return 'yesterday'; return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
 
 boot();

@@ -64,36 +64,58 @@ export function stripEndPhrase(t) {
 
 // Start a dictation session. onUpdate(text) streams the accumulated transcript
 // (finalized + interim); onDone(text) fires exactly once — when stopDictation()
-// is called or the user speaks an end phrase; onError(code) on fatal errors.
+// is called or the user speaks an end phrase; onError(code, textSoFar) on fatal
+// errors (textSoFar = everything captured before it died, so nothing is lost).
+// `seed` = text already in the box (a recovered draft or typed prefix) — the
+// session continues from it instead of overwriting it.
 // The recognizer is restarted automatically whenever the browser ends it on a
-// pause, so the user can think, breathe, and ramble as long as they like.
-export function startDictation({ onUpdate, onDone, onError } = {}) {
+// pause, and again when the app returns from the background (screen unlock,
+// app switch) — mobile OSes kill the mic while hidden, but the session and its
+// transcript survive and listening resumes on return.
+export function startDictation({ onUpdate, onDone, onError, seed = '' } = {}) {
   const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
-  if (!SR) { if (onError) onError('unsupported'); return false; }
+  if (!SR) { if (onError) onError('unsupported', String(seed || '').trim()); return false; }
   stopListening();
   stopDictationSilently();
 
-  const session = { finals: [], active: true, r: null, done: false };
+  const session = { finals: [], active: true, r: null, done: false, onVis: null };
+  if (seed && String(seed).trim()) session.finals.push(String(seed).replace(/\s+/g, ' ').trim());
   const fullText = () => session.finals.join(' ').replace(/\s+/g, ' ').trim();
+  const cleanup = () => {
+    if (session.onVis && typeof document !== 'undefined') document.removeEventListener('visibilitychange', session.onVis);
+    session.onVis = null;
+  };
   const finish = (text) => {
     if (session.done) return;
     session.done = true;
     session.active = false;
     if (dict === session) dict = null;
+    cleanup();
     try { if (session.r) session.r.stop(); } catch (e) {}
     if (onDone) onDone(text);
   };
   session.finish = () => finish(stripEndPhrase(fullText()).text);
+  session.cleanup = cleanup;
+  const fatal = (code) => {
+    if (session.done) return;
+    session.done = true;
+    session.active = false;
+    if (dict === session) dict = null;
+    cleanup();
+    if (onError) onError(code, stripEndPhrase(fullText()).text);
+  };
+  const retry = (ms) => setTimeout(() => { if (session.active && dict === session) spin(); }, ms);
 
   const spin = () => {
     let r;
-    try { r = new SR(); } catch (e) { session.active = false; if (onError) onError('start-failed'); return; }
+    try { r = new SR(); } catch (e) { fatal('start-failed'); return; }
     session.r = r;
     r.lang = 'en-US';
     r.interimResults = true;
     r.continuous = true;
     r.maxAlternatives = 1;
     r.onresult = (e) => {
+      if (session.r !== r || !session.active) return; // stale recognizer
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
@@ -105,19 +127,33 @@ export function startDictation({ onUpdate, onDone, onError } = {}) {
       if (onUpdate) onUpdate((fullText() + (interim ? ' ' + interim : '')).trim());
     };
     r.onerror = (e) => {
+      if (session.r !== r) return;
       const code = (e && e.error) || 'error';
-      if (code === 'no-speech' || code === 'aborted') return; // onend restarts us
-      session.active = false;
-      if (dict === session) dict = null;
-      if (onError) onError(code);
+      // transient: silence, our own restarts, flaky network/audio — onend restarts us
+      if (code === 'no-speech' || code === 'aborted' || code === 'network' || code === 'audio-capture') return;
+      // backgrounded (screen lock / app switch): the OS cut the mic. Keep the
+      // session and transcript alive; the visibility handler resumes on return.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fatal(code);
     };
     // The browser ends recognition after a few seconds of silence even in
     // continuous mode — restart while the session is alive so pauses are free.
     r.onend = () => {
-      if (session.active && dict === session) setTimeout(() => { if (session.active && dict === session) spin(); }, 150);
+      if (session.r !== r) return;
+      if (session.active && dict === session) retry(150);
     };
-    try { r.start(); } catch (e) { /* already started — ignore */ }
+    try { r.start(); } catch (e) { retry(1000); }
   };
+
+  if (typeof document !== 'undefined') {
+    session.onVis = () => {
+      if (!document.hidden && session.active && dict === session) {
+        try { if (session.r) session.r.stop(); } catch (e) {}
+        spin();
+      }
+    };
+    document.addEventListener('visibilitychange', session.onVis);
+  }
 
   dict = session;
   spin();
@@ -132,6 +168,7 @@ function stopDictationSilently() {
   const s = dict;
   dict = null;
   s.done = true; s.active = false;
+  if (s.cleanup) s.cleanup();
   try { if (s.r) s.r.stop(); } catch (e) {}
 }
 export function isDictating() { return !!dict; }

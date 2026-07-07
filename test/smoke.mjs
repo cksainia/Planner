@@ -295,6 +295,26 @@ try {
     RESULTS.push([!isDictating(), 'saying the end phrase finishes the session']);
     var lastMsg = chat.msgs[chat.msgs.length-1];
     RESULTS.push([chat.msgs.length===msgsBefore+1 && lastMsg.role==='user' && /turf$/.test(lastMsg.text) && !/done/i.test(lastMsg.text), 'the full dump is sent with the end phrase stripped']);
+
+    // 20) Lock-proof dictation: draft persisted while speaking, recoverable after
+    RESULTS.push([localStorage.getItem(DICT_DRAFT_KEY)===null, 'a successfully sent dump clears its saved draft']);
+    localStorage.setItem(DICT_DRAFT_KEY, JSON.stringify({ text:'ten minute rant about the backyard', at: Date.now()-60000, mode:'debrief' }));
+    view='ai'; render();
+    RESULTS.push([!!document.querySelector('.dictrestore') && /rant about the backyard/.test(document.querySelector('.draftpreview').textContent), 'a saved dictation is offered for recovery with a preview']);
+    view='reflect'; render();
+    RESULTS.push([/saved dictation is waiting/.test(document.querySelector('.debriefcard').textContent), 'the Reflect debrief card points to the waiting dictation']);
+    view='ai'; render();
+    document.querySelector('[data-action=dictDiscard]').click();
+    RESULTS.push([!document.querySelector('.dictrestore') && localStorage.getItem(DICT_DRAFT_KEY)===null, 'Discard removes the saved draft']);
+    localStorage.setItem(DICT_DRAFT_KEY, JSON.stringify({ text:'ten minute rant about the backyard', at: Date.now()-60000, mode:'debrief' }));
+    render();
+    document.querySelector('[data-action=dictResume]').click();
+    RESULTS.push([isDictating() && chat.mode==='debrief' && /rant about the backyard/.test(document.querySelector('#chatIn').value), 'Keep dictating resumes in debrief mode with the draft as the seed']);
+    window.__lastSR.onresult({ resultIndex:0, results:[ seg('and the turf edges still need pinning', true) ] });
+    RESULTS.push([/backyard and the turf edges/.test(document.querySelector('#chatIn').value), 'new speech appends to the recovered draft']);
+    RESULTS.push([/turf edges/.test(JSON.parse(localStorage.getItem(DICT_DRAFT_KEY)).text), 'the growing transcript is re-saved as you speak']);
+    stopDictation();
+    RESULTS.push([!isDictating() && localStorage.getItem(DICT_DRAFT_KEY)===null, 'finishing the session hands off the text and clears the draft']);
   `);
 
   let pass = 0, fail = 0;
